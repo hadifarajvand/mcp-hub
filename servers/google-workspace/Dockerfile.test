@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Minimal setup - skip network-dependent cloning for testing
+RUN pip install --no-cache-dir fastapi uvicorn 2>/dev/null || pip install fastapi uvicorn
+
+# Copy mock server
+COPY server-mock.py server.py
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["python", "server.py"]

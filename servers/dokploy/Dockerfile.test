@@ -1,0 +1,13 @@
+FROM node:22-slim
+
+WORKDIR /app
+
+# Copy mock server (no npm install needed for basic http server)
+COPY server-mock.js server.js
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["node", "server.js"]

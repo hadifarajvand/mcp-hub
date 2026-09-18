@@ -1,0 +1,63 @@
+
+services:
+  # Google Workspace MCP — Mock for testing
+  google-workspace:
+    build:
+      context: ./servers/google-workspace
+      dockerfile: Dockerfile.test
+    container_name: mcp-google-workspace-test
+    ports:
+      - "8001:8000"
+    environment:
+      - MCP_HTTP_PORT=8000
+      - MCP_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # Transcriber MCP — Real implementation (Python only, minimal deps)
+  transcriber:
+    build:
+      context: ./servers/transcriber
+      dockerfile: Dockerfile.test
+    container_name: mcp-transcriber-test
+    ports:
+      - "8002:8000"
+    environment:
+      - MCP_HTTP_PORT=8000
+      - MCP_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # Dokploy MCP — Mock for testing
+  dokploy:
+    build:
+      context: ./servers/dokploy
+      dockerfile: Dockerfile.test
+    container_name: mcp-dokploy-test
+    ports:
+      - "8003:8000"
+    environment:
+      - MCP_HTTP_PORT=8000
+      - MCP_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+networks:
+  default:
+    name: mcp-hub-test-network
+    driver: bridge
