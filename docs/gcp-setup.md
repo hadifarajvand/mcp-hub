@@ -1,220 +1,143 @@
-# Google Cloud Setup for Transcriber MCP
+# Transcriber MCP — OpenAI Whisper Setup
 
-Complete guide to configure Google Cloud credentials for the Transcriber MCP (Google Speech-to-Text).
+The Transcriber MCP uses **OpenAI Whisper** for local speech recognition. **No credentials, no Google Cloud account, no API keys needed!**
 
-## Overview
+## How It Works
 
-The Transcriber MCP uses Google Cloud Speech-to-Text API to convert audio and video to text. You'll need a Google Cloud service account with appropriate permissions.
+- **Local Processing**: Whisper runs entirely on your server (no external API calls)
+- **Auto Model Caching**: First run downloads the model (~140MB), then cached for future use
+- **99+ Languages**: Supports automatic language detection or specify language
+- **All Formats**: MP3, WAV, FLAC, OGG, M4A, MP4, MKV, WebM, and more
 
-## Step 1: Create Google Cloud Project (if needed)
+## Zero Setup Required
 
-If you already created a project for OAuth (Google Workspace), you can reuse it or create a separate one.
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com)
-2. Click the project dropdown
-3. Click **New Project**
-4. Name: "MCP Hub Transcriber" (or reuse existing)
-5. Click **Create**
-
-## Step 2: Enable Speech-to-Text API
-
-1. Go to **APIs & Services** → **Library**
-2. Search for **Cloud Speech-to-Text API**
-3. Click it
-4. Click **Enable**
-5. Wait for confirmation
-
-## Step 3: Create Service Account
-
-Service accounts allow the MCP to authenticate without user interaction.
-
-1. Go to **APIs & Services** → **Credentials**
-2. Click **Create Credentials** → **Service Account**
-3. Fill in:
-   - Service account name: "mcp-transcriber"
-   - Service account ID: (auto-filled)
-   - Description: "MCP hub transcriber service"
-4. Click **Create and Continue**
-5. Grant roles:
-   - Select **Cloud Speech-to-Text Client** role
-   - Or search for and select: `roles/speech.client`
-6. Click **Continue**
-7. Click **Done**
-
-## Step 4: Create Service Account Key
-
-1. Go to **APIs & Services** → **Credentials**
-2. Under **Service Accounts**, click the newly created account (`mcp-transcriber@...`)
-3. Go to the **Keys** tab
-4. Click **Add Key** → **Create new key**
-5. Type: **JSON**
-6. Click **Create**
-7. A JSON file downloads automatically
-
-## Step 5: Configure MCP Hub
-
-1. Save the downloaded JSON file securely (e.g., `google-credentials.json`)
-
-2. Edit `servers/transcriber/.env`:
+Just copy the `.env.example`:
 
 ```bash
-GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json
+cp servers/transcriber/.env.example servers/transcriber/.env
+```
+
+No credentials needed. The Dockerfile pre-caches the Whisper base model during build.
+
+## Configuration
+
+Edit `servers/transcriber/.env`:
+
+```bash
+# Whisper Model Size
+# Options: tiny (39M), base (140M), small (466M), medium (1.5G), large (2.9G)
+# Default: base (good balance, pre-cached)
+WHISPER_MODEL=base
+
+# Models directory (auto-managed, no action needed)
+WHISPER_MODELS_DIR=/app/whisper_models
+
+# HTTP server
 MCP_HTTP_PORT=8000
 MCP_HOST=0.0.0.0
 ```
 
-3. Update `docker-compose.yml` to mount the credentials:
+## Usage
 
-Edit the `transcriber` service in `docker-compose.yml`:
-
-```yaml
-transcriber:
-  build:
-    context: ./servers/transcriber
-    dockerfile: Dockerfile
-  container_name: mcp-transcriber
-  env_file:
-    - ./servers/transcriber/.env
-  ports:
-    - "8002:8000"
-  volumes:
-    - transcriber-cache:/app/cache
-    - ./google-credentials.json:/app/credentials.json:ro  # Add this line
-  environment:
-    - MCP_HTTP_PORT=8000
-    - MCP_HOST=0.0.0.0
-  # ... rest of config
-```
-
-4. (Local dev only) Copy JSON to root of mcp-hub:
+Once deployed:
 
 ```bash
-cp ~/Downloads/mcp-transcriber-*.json ./google-credentials.json
+# Transcribe audio file
+# In Claude: "Please transcribe /path/to/audio.mp3 in English"
+
+# Transcribe video file (audio extracted automatically)
+# In Claude: "Transcribe /path/to/video.mp4"
+
+# List supported languages
+# In Claude: "What languages does the transcriber support?"
 ```
 
-## Step 6: Set Up Billing
+## Supported Languages
 
-Google Cloud APIs require billing to be enabled:
+Whisper supports 99+ languages including:
+- English (en)
+- Spanish (es)
+- French (fr)
+- German (de)
+- Italian (it)
+- Portuguese (pt, pt-BR)
+- Russian (ru)
+- Japanese (ja)
+- Chinese (zh, zh-CN, zh-TW)
+- Korean (ko)
+- Arabic (ar)
+- Hindi (hi)
+- And many more...
 
-1. Go to **Billing**
-2. Click **Create Account** (if you don't have one)
-3. Add a payment method
-4. Link the billing account to your project
+## Model Trade-offs
 
-Speech-to-Text has a free tier: **60 minutes per month** (auto-renewable). Production usage is charged per minute.
+| Model | Size | Speed | Quality | GPU RAM |
+|-------|------|-------|---------|---------|
+| tiny | 39M | Very Fast | Basic | 1GB |
+| base | 140M | Fast | Good | 2GB |
+| small | 466M | Medium | Better | 3GB |
+| medium | 1.5G | Slower | Very Good | 5GB |
+| large | 2.9G | Slowest | Excellent | 10GB |
 
-See [Speech-to-Text Pricing](https://cloud.google.com/speech-to-text/pricing).
+## Docker Build
 
-## Step 7: Test
+The Dockerfile automatically:
+1. Installs FFmpeg (for video processing)
+2. Installs PyTorch with CUDA support (GPU enabled)
+3. Installs Whisper library
+4. Pre-caches the base model (~140MB download at build time)
 
-1. Start the MCP hub:
-   ```bash
-   docker compose up --build
-   ```
+```bash
+docker compose build transcriber
+```
 
-2. Test transcription:
-   ```bash
-   # Via Claude Code
-   claude list-tools  # Should see transcribe_audio, transcribe_video, list_supported_languages
-   
-   # Or directly to the MCP
-   curl http://localhost:8002/health
-   ```
-
-3. Try transcribing a sample file:
-   ```bash
-   # Download a sample audio file
-   wget https://www.w3schools.com/html/horse.mp3 -O sample.mp3
-   
-   # Use Claude to transcribe
-   # "Please transcribe this audio file: /path/to/sample.mp3"
-   ```
-
-## Billing Alerts
-
-To avoid unexpected charges, set up billing alerts:
-
-1. Go to **Billing** → **Budgets**
-2. Click **Create Budget**
-3. Set budget amount (e.g., $10/month)
-4. Add alert thresholds (e.g., 50%, 100%)
-5. Set notification email
-6. Click **Create Budget**
-
-## Service Account Security
-
-**Do NOT commit `google-credentials.json` to Git!**
-
-1. Add to `.gitignore`:
-   ```
-   google-credentials.json
-   ```
-
-2. For Dokploy deployment:
-   - Use Dokploy's **Secrets** feature to store the JSON securely
-   - Or mount as a volume from a secrets manager
-
-3. Rotate keys periodically:
-   - Delete old key in **Service Accounts** → **Keys**
-   - Create new key
-   - Update environment variable
-
-## Transcription Quotas & Limits
-
-Google Speech-to-Text has these limits (per [documentation](https://cloud.google.com/speech-to-text/quotas)):
-
-| Limit | Value |
-|-------|-------|
-| Max file size (long-running) | Unlimited (up to 480 hours) |
-| Max file size (synchronous) | 500 MB |
-| Max audio length (free tier) | 60 min/month |
-| Concurrent requests | 100+ (depends on tier) |
-| Supported formats | MP3, WAV, FLAC, OGG, M4A, and 15+ others |
-| Supported languages | 100+ |
+First build takes ~5 minutes (downloads model). Subsequent builds use cached layer.
 
 ## Troubleshooting
 
-### "Permission denied" when starting transcriber
+### Transcription slow on CPU
 
-- Verify `GOOGLE_APPLICATION_CREDENTIALS` path is correct
-- Ensure JSON file is readable by Docker container
-- Check service account has **Cloud Speech-to-Text Client** role
+- GPU recommended for faster transcription
+- Docker includes CUDA support (pytorch/pytorch:2.1.0-cuda12.1-runtime image)
+- CPU transcription is 10x slower
 
-### "Invalid API key" or "API_KEY_INVALID"
+### "Whisper not available" error
 
-- Service account credentials are not API keys
-- Ensure you're using a **service account JSON**, not an API key
-- Re-download the JSON from service account **Keys** tab
+- Check container logs: `docker logs mcp-transcriber`
+- Verify build completed successfully
+- Rebuild: `docker compose build --no-cache transcriber`
 
-### "Usage limit exceeded" error
+### Out of memory during transcription
 
-- You've exceeded the free tier (60 min/month)
-- Billing must be enabled; add a payment method
-- Or delete the project and create a new one next month
+- Reduce model size (use `WHISPER_MODEL=tiny` instead of `large`)
+- Increase Docker memory limit in compose or container settings
 
-### Transcription takes a long time
+### Supported format error
 
-- Large files (1+ GB) may take several minutes
-- The MCP timeout is 300 seconds by default (adjust in `.env` if needed)
-- Google Cloud may queue requests during high usage
+- Ensure FFmpeg is available (included in Dockerfile)
+- Check file is valid media format
 
-### "Failed to extract audio from video"
+## Advanced: GPU Acceleration
 
-- Ensure `ffmpeg` is installed in the Transcriber container
-- Dockerfile includes `ffmpeg` by default
-- Check video file format is supported by ffmpeg
+The container uses `pytorch/pytorch:2.1.0-cuda12.1-runtime`, which includes CUDA support.
 
-## Advanced: Multiple Projects or Accounts
+For GPU acceleration:
+1. Ensure NVIDIA GPU drivers installed on host
+2. Install NVIDIA Docker runtime: https://github.com/NVIDIA/nvidia-docker
+3. Add to `docker-compose.yml`:
+   ```yaml
+   transcriber:
+     runtime: nvidia
+     environment:
+       - NVIDIA_VISIBLE_DEVICES=all
+   ```
 
-To use different projects for different MCPs:
+## No Costs
 
-1. Create separate service accounts in different projects
-2. In Dokploy, set different `GOOGLE_APPLICATION_CREDENTIALS` paths per service
-3. Or use separate Docker Compose files per deployment
+Whisper is open-source and free. No billing, no API calls, no quotas.
 
 ## Support
 
-- [Google Cloud Speech-to-Text Documentation](https://cloud.google.com/speech-to-text/docs)
-- [Google Cloud Service Accounts](https://cloud.google.com/iam/docs/service-accounts)
-- [Speech-to-Text API Reference](https://cloud.google.com/speech-to-text/docs/reference)
-- [Supported Languages](https://cloud.google.com/speech-to-text/docs/languages)
+- [OpenAI Whisper GitHub](https://github.com/openai/whisper)
+- [Whisper Model Documentation](https://openai.com/research/whisper)
+- [pyTranscriber GitHub](https://github.com/raryelcostasouza/pyTranscriber)

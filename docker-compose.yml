@@ -28,7 +28,7 @@ services:
       - "traefik.http.routers.google-workspace.rule=PathPrefix(`/google-workspace`)"
       - "traefik.http.services.google-workspace.loadbalancer.server.port=8000"
 
-  # Transcriber MCP — Google Speech-to-Text for audio/video transcription
+  # Transcriber MCP — OpenAI Whisper for local audio/video transcription (no credentials needed)
   transcriber:
     build:
       context: ./servers/transcriber
@@ -39,16 +39,17 @@ services:
     ports:
       - "8002:8000"
     volumes:
-      - transcriber-cache:/app/cache
+      - transcriber-whisper:/app/whisper_models
     environment:
       - MCP_HTTP_PORT=8000
       - MCP_HOST=0.0.0.0
+      - WHISPER_MODEL=base
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 60s
     restart: unless-stopped
     labels:
       - "traefik.enable=true"
@@ -83,7 +84,7 @@ services:
 volumes:
   google-workspace-tokens:
     driver: local
-  transcriber-cache:
+  transcriber-whisper:
     driver: local
 
 networks:

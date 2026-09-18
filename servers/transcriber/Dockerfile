@@ -1,12 +1,16 @@
-FROM python:3.11-slim
+FROM pytorch/pytorch:2.1.0-cuda12.1-runtime-ubuntu22.04
 
 WORKDIR /app
 
-# Install system dependencies (ffmpeg for audio/video extraction)
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
+    git \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy pyTranscriber (cloned locally)
+COPY vendor /app/vendor
 
 # Copy requirements
 COPY requirements.txt .
@@ -14,8 +18,10 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Create cache directory
-RUN mkdir -p /app/cache
+# Pre-download Whisper model (base model ~140MB)
+RUN mkdir -p /app/whisper_models && \
+    python -c "import whisper; whisper.load_model('base', download_root='/app/whisper_models', device='cpu')" && \
+    echo "✓ Whisper base model cached"
 
 # Copy MCP server code
 COPY server.py .

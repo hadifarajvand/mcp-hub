@@ -12,8 +12,7 @@ A unified, self-hosted **Model Context Protocol (MCP) hub** combining three powe
 
 - Docker & Docker Compose (v20.10+)
 - Dokploy instance running (self-hosted or cloud)
-- Google Cloud account with OAuth 2.0 credentials (for Workspace MCP)
-- Google Cloud service account with Speech-to-Text API enabled (for Transcriber MCP)
+- Google Cloud account with OAuth 2.0 credentials (for Workspace MCP only)
 - Dokploy API key (for Dokploy MCP)
 
 ### Local Development
@@ -23,29 +22,29 @@ A unified, self-hosted **Model Context Protocol (MCP) hub** combining three powe
 git clone <repo-url> mcp-hub
 cd mcp-hub
 
-# Copy environment template
+# Copy environment templates (transcriber has no secrets, just copy it)
 cp servers/google-workspace/.env.example servers/google-workspace/.env
 cp servers/transcriber/.env.example servers/transcriber/.env
 cp servers/dokploy/.env.example servers/dokploy/.env
 
-# Edit .env files with your credentials
-nano servers/google-workspace/.env
-nano servers/transcriber/.env
-nano servers/dokploy/.env
+# Edit only the services that need credentials
+nano servers/google-workspace/.env  # Set GOOGLE_OAUTH_CLIENT_ID + SECRET
+nano servers/dokploy/.env           # Set DOKPLOY_URL + API_KEY
+# Transcriber needs no edits — it just works!
 
 # Build and start all MCP servers
 docker compose up --build
 
 # In another terminal, test the health endpoints
-curl http://localhost:8001/health
-curl http://localhost:8002/health
-curl http://localhost:8003/health
+curl http://localhost:8001/health   # Google Workspace
+curl http://localhost:8002/health   # Transcriber (no auth needed)
+curl http://localhost:8003/health   # Dokploy
 ```
 
 Each server exposes an HTTP endpoint:
-- **Google Workspace MCP**: `http://localhost:8001` (port 8001)
-- **Transcriber MCP**: `http://localhost:8002` (port 8002)
-- **Dokploy MCP**: `http://localhost:8003` (port 8003)
+- **Google Workspace MCP**: `http://localhost:8001` (port 8001) — requires OAuth setup
+- **Transcriber MCP**: `http://localhost:8002` (port 8002) — **ready to use immediately**
+- **Dokploy MCP**: `http://localhost:8003` (port 8003) — requires Dokploy credentials
 
 ### Connecting to Claude Code
 
@@ -116,21 +115,21 @@ See [docs/oauth-setup.md](docs/oauth-setup.md) for full OAuth guide.
 ### 2. Transcriber MCP
 **Tools**: 3 (transcribe_audio, transcribe_video, list_supported_languages)
 
-**Base**: Custom FastMCP wrapper around Google Cloud Speech-to-Text API
+**Base**: FastMCP wrapper around OpenAI Whisper (local speech recognition)
 
 **Supported formats**:
-- Audio: MP3, WAV, FLAC, OGG, M4A
-- Video: MP4, MOV, AVI, MKV, WebM (audio extracted automatically)
+- Audio: MP3, WAV, FLAC, OGG, M4A, and all FFmpeg-supported formats
+- Video: MP4, MOV, AVI, MKV, WebM (audio extracted automatically via FFmpeg)
 
-**Supported languages**: 100+ via Google Cloud Speech-to-Text (en-US, pt-BR, es-ES, fr-FR, ja-JP, zh-CN, etc.)
+**Supported languages**: 99+ (en, es, fr, de, it, pt, pt-BR, ru, ja, ko, zh, zh-CN, zh-TW, ar, hi, and more)
 
-**Setup**:
-1. Create Google Cloud service account with Speech-to-Text API access
-2. Download JSON credentials
-3. Mount credentials as secret in Docker
-4. Set `GOOGLE_APPLICATION_CREDENTIALS` in `.env`
+**Setup**: ✅ **Zero setup required!**
+- No credentials needed
+- No external API calls
+- Model auto-downloads and caches on first use (~140MB for base model)
+- Just works out of the box
 
-See [docs/gcp-setup.md](docs/gcp-setup.md) for full GCP setup guide.
+See [docs/gcp-setup.md](docs/gcp-setup.md) for model options and GPU setup.
 
 ### 3. Dokploy MCP
 **Tools**: 53 across deployments, containers, databases, domains, backups, monitoring
@@ -184,8 +183,8 @@ In Dokploy dashboard, configure per-service environment variables:
 - `GOOGLE_OAUTH_REDIRECT_URI`: `https://mcp.yourdomain.com/google-workspace/oauth/callback`
 
 **For transcriber service**:
-- `GOOGLE_APPLICATION_CREDENTIALS`: `/app/credentials.json`
-- Mount Google service account JSON as a secret
+- ✅ **No setup needed** — Whisper model auto-caches on first run
+- Optional: Set `WHISPER_MODEL=base` (or tiny/small/medium/large)
 
 **For dokploy service**:
 - `DOKPLOY_URL`: Internal URL to Dokploy API (e.g., `http://dokploy:3000`)

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Google Speech-to-Text MCP Server
-Transcribes audio and video files using Google Cloud Speech-to-Text API.
-Inspired by pyTranscriber's multilingual transcription capabilities.
+Transcriber MCP Server — OpenAI Whisper via pyTranscriber
+Transcribes audio and video files locally using OpenAI Whisper.
+No credentials required — models cached locally after first download.
 """
 
 import os
@@ -11,75 +11,118 @@ import json
 import tempfile
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Optional
+
+# Add vendor pyTranscriber to path
+sys.path.insert(0, "/app/vendor")
+
+try:
+    import whisper
+    whisper_available = True
+except ImportError:
+    print("Warning: Whisper not available yet (will be installed)")
+    whisper_available = False
+
 from mcp.server import Server
 from mcp.types import Tool, TextContent, ToolResult
-import google.auth
-from google.cloud import speech_v1
 
-# FastMCP server initialization
 app = Server("transcriber-mcp")
 
-# Supported language codes (simplified set; Google Cloud Speech supports 100+)
+# Supported languages (Whisper supports 99+ languages)
 SUPPORTED_LANGUAGES = {
-    "en-US": "English (US)",
-    "en-GB": "English (UK)",
+    "en": "English",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "it": "Italian",
+    "pt": "Portuguese",
     "pt-BR": "Portuguese (Brazil)",
-    "pt-PT": "Portuguese (Portugal)",
-    "es-ES": "Spanish (Spain)",
-    "es-MX": "Spanish (Mexico)",
-    "fr-FR": "French",
-    "de-DE": "German",
-    "it-IT": "Italian",
-    "ja-JP": "Japanese",
+    "ru": "Russian",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "zh": "Chinese",
     "zh-CN": "Chinese (Simplified)",
     "zh-TW": "Chinese (Traditional)",
-    "ko-KR": "Korean",
-    "ru-RU": "Russian",
-    "ar-SA": "Arabic",
-    "hi-IN": "Hindi",
+    "ar": "Arabic",
+    "hi": "Hindi",
+    "th": "Thai",
+    "tr": "Turkish",
+    "nl": "Dutch",
+    "pl": "Polish",
+    "sv": "Swedish",
+    "da": "Danish",
+    "no": "Norwegian",
+    "fi": "Finnish",
+    "hu": "Hungarian",
+    "cs": "Czech",
+    "ro": "Romanian",
+    "el": "Greek",
+    "vi": "Vietnamese",
+    "id": "Indonesian",
+    "ms": "Malay",
 }
 
-# Initialize Google Cloud Speech-to-Text client
-try:
-    speech_client = speech_v1.SpeechClient()
-    credentials_available = True
-except Exception as e:
-    print(f"Warning: Could not initialize Google Cloud Speech client: {e}")
-    print("Ensure GOOGLE_APPLICATION_CREDENTIALS is set or credentials are available.")
-    credentials_available = True  # Attempt to fail gracefully at runtime
+# Model size (can be: tiny, base, small, medium, large)
+MODEL_SIZE = os.getenv("WHISPER_MODEL", "base")
+MODELS_DIR = os.getenv("WHISPER_MODELS_DIR", "/app/whisper_models")
+
+# Ensure models directory exists
+os.makedirs(MODELS_DIR, exist_ok=True)
+
+
+def load_whisper_model():
+    """Load Whisper model (downloads if needed)."""
+    try:
+        print(f"Loading Whisper model: {MODEL_SIZE}")
+        model = whisper.load_model(
+            MODEL_SIZE,
+            device="cuda" if _cuda_available() else "cpu",
+            download_root=MODELS_DIR,
+        )
+        return model
+    except Exception as e:
+        print(f"Error loading Whisper model: {e}")
+        raise
+
+
+def _cuda_available():
+    """Check if CUDA is available."""
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except Exception:
+        return False
 
 
 @app.call_tool()
 async def transcribe_audio(
     file_path: str,
-    language_code: str = "en-US",
-    punctuation: bool = True,
+    language: str = "en",
+    verbose: bool = False,
 ) -> ToolResult:
     """
-    Transcribe an audio file using Google Cloud Speech-to-Text.
+    Transcribe an audio file using OpenAI Whisper.
 
     Args:
-        file_path: Path to audio file (MP3, WAV, FLAC, OGG, etc.)
-        language_code: Language code (e.g., 'en-US', 'pt-BR'). Defaults to 'en-US'.
-        punctuation: Add punctuation to transcript. Defaults to True.
+        file_path: Path to audio file (MP3, WAV, FLAC, OGG, M4A, etc.)
+        language: Language code (e.g., 'en', 'pt-BR', 'ja'). Defaults to 'en'.
+        verbose: Show transcription progress. Defaults to False.
 
     Returns:
-        Transcript text and confidence score.
+        Transcript text with timing information.
     """
-    if not credentials_available:
+    if not whisper_available:
         return ToolResult(
             content=[
                 TextContent(
                     type="text",
-                    text="Error: Google Cloud credentials not available. Set GOOGLE_APPLICATION_CREDENTIALS environment variable.",
+                    text="Error: Whisper not available. Check container logs.",
                 )
             ],
             is_error=True,
         )
 
     try:
-        # Validate file exists
         if not os.path.exists(file_path):
             return ToolResult(
                 content=[
@@ -91,49 +134,16 @@ async def transcribe_audio(
                 is_error=True,
             )
 
-        # Read audio file
-        with open(file_path, "rb") as audio_file:
-            content = audio_file.read()
+        print(f"Transcribing audio: {file_path}")
+        model = load_whisper_model()
 
-        # Determine encoding from file extension
-        file_ext = Path(file_path).suffix.lower()
-        encoding_map = {
-            ".mp3": speech_v1.RecognitionConfig.AudioEncoding.MP3,
-            ".wav": speech_v1.RecognitionConfig.AudioEncoding.LINEAR16,
-            ".flac": speech_v1.RecognitionConfig.AudioEncoding.FLAC,
-            ".ogg": speech_v1.RecognitionConfig.AudioEncoding.OGG_OPUS,
-        }
-        encoding = encoding_map.get(
-            file_ext, speech_v1.RecognitionConfig.AudioEncoding.MP3
+        result = model.transcribe(
+            file_path,
+            language=language,
+            verbose=verbose,
         )
 
-        # Configure recognition
-        config = speech_v1.RecognitionConfig(
-            encoding=encoding,
-            sample_rate_hertz=16000,
-            language_code=language_code,
-            enable_automatic_punctuation=punctuation,
-        )
-
-        audio = speech_v1.RecognitionAudio(content=content)
-
-        # Perform transcription
-        operation = speech_client.long_running_recognize(config=config, audio=audio)
-        response = operation.result(timeout=300)
-
-        # Extract transcript and confidence
-        transcripts = []
-        for result in response.results:
-            if result.alternatives:
-                alt = result.alternatives[0]
-                transcripts.append(
-                    {
-                        "text": alt.transcript,
-                        "confidence": alt.confidence,
-                    }
-                )
-
-        if not transcripts:
+        if not result or not result.get("text"):
             return ToolResult(
                 content=[
                     TextContent(
@@ -144,16 +154,18 @@ async def transcribe_audio(
                 is_error=False,
             )
 
-        result_text = "\n".join([t["text"] for t in transcripts])
-        avg_confidence = (
-            sum(t["confidence"] for t in transcripts) / len(transcripts)
-        )
+        transcript = result["text"].strip()
+        segments_info = ""
+        if result.get("segments"):
+            segments_info = "\n\nDetailed segments:\n"
+            for seg in result["segments"]:
+                segments_info += f"[{seg['start']:.2f}s - {seg['end']:.2f}s] {seg['text']}\n"
 
         return ToolResult(
             content=[
                 TextContent(
                     type="text",
-                    text=f"Transcript (confidence: {avg_confidence:.2%}):\n\n{result_text}",
+                    text=f"Transcript:\n\n{transcript}{segments_info}",
                 )
             ],
             is_error=False,
@@ -169,33 +181,32 @@ async def transcribe_audio(
 @app.call_tool()
 async def transcribe_video(
     file_path: str,
-    language_code: str = "en-US",
-    punctuation: bool = True,
+    language: str = "en",
+    verbose: bool = False,
 ) -> ToolResult:
     """
-    Transcribe a video file by extracting audio and using Google Cloud Speech-to-Text.
+    Transcribe a video file by extracting audio using OpenAI Whisper.
 
     Args:
-        file_path: Path to video file (MP4, MOV, AVI, MKV, etc.)
-        language_code: Language code (e.g., 'en-US', 'pt-BR'). Defaults to 'en-US'.
-        punctuation: Add punctuation to transcript. Defaults to True.
+        file_path: Path to video file (MP4, MOV, AVI, MKV, WebM, etc.)
+        language: Language code (e.g., 'en', 'pt-BR', 'ja'). Defaults to 'en'.
+        verbose: Show transcription progress. Defaults to False.
 
     Returns:
-        Transcript text and confidence score.
+        Transcript text with timing information.
     """
-    if not credentials_available:
+    if not whisper_available:
         return ToolResult(
             content=[
                 TextContent(
                     type="text",
-                    text="Error: Google Cloud credentials not available. Set GOOGLE_APPLICATION_CREDENTIALS environment variable.",
+                    text="Error: Whisper not available. Check container logs.",
                 )
             ],
             is_error=True,
         )
 
     try:
-        # Validate file exists
         if not os.path.exists(file_path):
             return ToolResult(
                 content=[
@@ -207,7 +218,9 @@ async def transcribe_video(
                 is_error=True,
             )
 
-        # Extract audio from video using ffmpeg
+        print(f"Transcribing video (extracting audio first): {file_path}")
+
+        # Whisper can handle video files directly, but we'll extract audio for efficiency
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_audio:
             tmp_audio_path = tmp_audio.name
 
@@ -233,12 +246,11 @@ async def transcribe_video(
             # Transcribe extracted audio
             return await transcribe_audio(
                 file_path=tmp_audio_path,
-                language_code=language_code,
-                punctuation=punctuation,
+                language=language,
+                verbose=verbose,
             )
 
         finally:
-            # Clean up temporary audio file
             if os.path.exists(tmp_audio_path):
                 os.remove(tmp_audio_path)
 
@@ -247,7 +259,7 @@ async def transcribe_video(
             content=[
                 TextContent(
                     type="text",
-                    text=f"Error: Failed to extract audio from video: {e.stderr.decode()}",
+                    text=f"Error: Failed to extract audio from video: {e.stderr.decode() if e.stderr else str(e)}",
                 )
             ],
             is_error=True,
@@ -267,36 +279,35 @@ async def list_supported_languages() -> ToolResult:
         content=[
             TextContent(
                 type="text",
-                text=f"Supported languages:\n\n{lang_list}\n\nUse the language code (e.g., 'en-US') as the language_code parameter.",
+                text=f"Supported languages ({len(SUPPORTED_LANGUAGES)}+):\n\n{lang_list}\n\nUse the language code (e.g., 'en', 'pt-BR', 'ja') as the language parameter.\n\nNote: Whisper supports 99+ languages total.",
             )
         ],
         is_error=False,
     )
 
 
-# Register tools
 @app.list_tools()
 async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="transcribe_audio",
-            description="Transcribe an audio file (MP3, WAV, FLAC, OGG) to text using Google Cloud Speech-to-Text",
+            description="Transcribe an audio file to text using OpenAI Whisper (local, no credentials needed)",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "Path to the audio file",
+                        "description": "Path to the audio file (MP3, WAV, FLAC, OGG, M4A, etc.)",
                     },
-                    "language_code": {
+                    "language": {
                         "type": "string",
-                        "description": "Language code (e.g., 'en-US', 'pt-BR'). Default: en-US",
-                        "default": "en-US",
+                        "description": "Language code (e.g., 'en', 'pt-BR', 'ja'). Default: en",
+                        "default": "en",
                     },
-                    "punctuation": {
+                    "verbose": {
                         "type": "boolean",
-                        "description": "Add punctuation to transcript. Default: true",
-                        "default": True,
+                        "description": "Show transcription progress. Default: false",
+                        "default": False,
                     },
                 },
                 "required": ["file_path"],
@@ -304,23 +315,23 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="transcribe_video",
-            description="Transcribe a video file (MP4, MOV, AVI, MKV) by extracting audio and using Google Cloud Speech-to-Text",
+            description="Transcribe a video file to text using OpenAI Whisper (extracts audio automatically)",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "Path to the video file",
+                        "description": "Path to the video file (MP4, MOV, AVI, MKV, WebM, etc.)",
                     },
-                    "language_code": {
+                    "language": {
                         "type": "string",
-                        "description": "Language code (e.g., 'en-US', 'pt-BR'). Default: en-US",
-                        "default": "en-US",
+                        "description": "Language code (e.g., 'en', 'pt-BR', 'ja'). Default: en",
+                        "default": "en",
                     },
-                    "punctuation": {
+                    "verbose": {
                         "type": "boolean",
-                        "description": "Add punctuation to transcript. Default: true",
-                        "default": True,
+                        "description": "Show transcription progress. Default: false",
+                        "default": False,
                     },
                 },
                 "required": ["file_path"],
@@ -344,4 +355,8 @@ if __name__ == "__main__":
     host = os.getenv("MCP_HOST", "0.0.0.0")
 
     print(f"Starting Transcriber MCP server on {host}:{port}")
+    print(f"Whisper model: {MODEL_SIZE}")
+    print(f"Models directory: {MODELS_DIR}")
+    print(f"CUDA available: {_cuda_available()}")
+
     uvicorn.run(app, host=host, port=port)
