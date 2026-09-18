@@ -23,14 +23,9 @@ echo "Starting Dokploy MCP server..."
 echo "  Dokploy URL: ${DOKPLOY_URL}"
 echo "  Listening on ${MCP_HOST}:${MCP_HTTP_PORT}"
 
-# Add dokploy_mcp_src to Python path and run the server
-export PYTHONPATH="/app/dokploy_mcp_src:${PYTHONPATH}"
+# Run the Node.js MCP server with HTTP transport
 cd /app/dokploy_mcp_src
-
-# Try running as module
-python -m dokploy_mcp.server \
-    --http \
-    --host "${MCP_HOST}" \
-    --port "${MCP_HTTP_PORT}" || \
-# Fallback: try running server.py if module doesn't work
-python server.py
+export MCP_TRANSPORT=http
+export MCP_HTTP_HOST="${MCP_HOST}"
+export MCP_HTTP_PORT="${MCP_HTTP_PORT}"
+node dist/index.js

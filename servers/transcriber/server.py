@@ -2,6 +2,7 @@
 """
 Transcriber MCP Server — Google Cloud Speech-to-Text
 Transcribes audio and video files using Google's speech recognition API.
+Requires GOOGLE_APPLICATION_CREDENTIALS environment variable to be set.
 """
 
 import os
@@ -10,20 +11,18 @@ import json
 import tempfile
 import subprocess
 from pathlib import Path
-from typing import Optional
 
-# Try to import Google Cloud Speech
 try:
     from google.cloud import speech
-    google_cloud_available = True
+    GOOGLE_CLOUD_AVAILABLE = True
 except ImportError:
-    print("Warning: Google Cloud Speech not installed")
-    google_cloud_available = False
+    GOOGLE_CLOUD_AVAILABLE = False
+    print("Warning: Google Cloud Speech SDK not available")
 
-from mcp.server import Server
-from mcp.types import TextContent, Tool
+from fastapi import FastAPI
+from pydantic import BaseModel
 
-app = Server("transcriber-mcp")
+app = FastAPI(title="Transcriber MCP")
 
 # Supported languages
 SUPPORTED_LANGUAGES = {
@@ -51,126 +50,114 @@ SUPPORTED_LANGUAGES = {
 }
 
 
-@app.call_tool()
-async def transcribe_audio(
-    file_path: str,
-    language: str = "en",
-):
-    """
-    Transcribe an audio file using Google Cloud Speech-to-Text.
+class TranscribeRequest(BaseModel):
+    file_path: str
+    language: str = "en"
 
-    Args:
-        file_path: Path to audio file (MP3, WAV, FLAC, OGG, M4A, etc.)
-        language: Language code (e.g., 'en', 'pt-BR', 'ja'). Defaults to 'en'.
 
-    Returns:
-        Transcript text.
-    """
-    if not google_cloud_available:
-        return [
-            TextContent(
-                type="text",
-                text="Error: Google Cloud Speech not available. Check GOOGLE_APPLICATION_CREDENTIALS.",
-            )
-        ]
+class ListLanguagesRequest(BaseModel):
+    pass
 
-    if not os.path.exists(file_path):
-        return [
-            TextContent(
-                type="text",
-                text=f"Error: File not found: {file_path}",
-            )
-        ]
+
+@app.get("/health")
+async def health():
+    """Health check endpoint"""
+    return {"status": "ok", "service": "transcriber-mcp"}
+
+
+@app.post("/transcribe_audio")
+async def transcribe_audio(request: TranscribeRequest):
+    """Transcribe an audio file using Google Cloud Speech-to-Text"""
+    if not GOOGLE_CLOUD_AVAILABLE:
+        return {
+            "error": "Google Cloud Speech not available. Check GOOGLE_APPLICATION_CREDENTIALS.",
+            "success": False,
+        }
+
+    if not os.path.exists(request.file_path):
+        return {
+            "error": f"File not found: {request.file_path}",
+            "success": False,
+        }
 
     try:
-        print(f"Transcribing audio: {file_path}")
+        print(f"Transcribing audio: {request.file_path} (language: {request.language})")
 
         client = speech.SpeechClient()
 
-        with open(file_path, "rb") as audio_file:
+        # Read audio file
+        with open(request.file_path, "rb") as audio_file:
             content = audio_file.read()
 
         audio = speech.RecognitionAudio(content=content)
         config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=16000,
-            language_code=language,
+            language_code=request.language,
         )
 
+        # Perform transcription
         response = client.recognize(config=config, audio=audio)
 
         if not response.results:
-            return [
-                TextContent(
-                    type="text",
-                    text="No transcription result found.",
-                )
-            ]
+            return {
+                "transcript": "",
+                "success": True,
+                "message": "No speech detected in audio",
+            }
 
-        transcript = ""
+        # Combine all transcription results
+        transcript_parts = []
         for result in response.results:
             for alternative in result.alternatives:
-                transcript += alternative.transcript + " "
+                transcript_parts.append(alternative.transcript)
 
-        return [
-            TextContent(
-                type="text",
-                text=transcript.strip(),
-            )
-        ]
+        transcript = " ".join(transcript_parts)
+        return {
+            "transcript": transcript,
+            "success": True,
+            "confidence": (
+                sum(alt.confidence for result in response.results
+                    for alt in result.alternatives) / max(len([alt for result in response.results for alt in result.alternatives]), 1)
+            ),
+        }
 
     except Exception as e:
-        return [
-            TextContent(
-                type="text",
-                text=f"Error: {str(e)}",
-            )
-        ]
+        return {
+            "error": f"Transcription failed: {str(e)}",
+            "success": False,
+        }
 
 
-@app.call_tool()
-async def transcribe_video(
-    file_path: str,
-    language: str = "en",
-):
-    """
-    Transcribe a video file by extracting audio using Google Cloud Speech-to-Text.
+@app.post("/transcribe_video")
+async def transcribe_video(request: TranscribeRequest):
+    """Transcribe a video file by extracting audio first"""
+    if not GOOGLE_CLOUD_AVAILABLE:
+        return {
+            "error": "Google Cloud Speech not available.",
+            "success": False,
+        }
 
-    Args:
-        file_path: Path to video file (MP4, MOV, AVI, MKV, WebM, etc.)
-        language: Language code (e.g., 'en', 'pt-BR', 'ja'). Defaults to 'en'.
-
-    Returns:
-        Transcript text.
-    """
-    if not google_cloud_available:
-        return [
-            TextContent(
-                type="text",
-                text="Error: Google Cloud Speech not available.",
-            )
-        ]
-
-    if not os.path.exists(file_path):
-        return [
-            TextContent(
-                type="text",
-                text=f"Error: File not found: {file_path}",
-            )
-        ]
+    if not os.path.exists(request.file_path):
+        return {
+            "error": f"File not found: {request.file_path}",
+            "success": False,
+        }
 
     try:
-        print(f"Transcribing video (extracting audio first): {file_path}")
+        print(f"Transcribing video (extracting audio first): {request.file_path}")
 
+        # Create temporary audio file
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_audio:
             tmp_audio_path = tmp_audio.name
 
         try:
+            # Extract audio from video using ffmpeg
             subprocess.run(
                 [
                     "ffmpeg",
                     "-i",
-                    file_path,
+                    request.file_path,
                     "-ab",
                     "160k",
                     "-ac",
@@ -182,99 +169,50 @@ async def transcribe_video(
                 ],
                 check=True,
                 capture_output=True,
+                timeout=300,
             )
 
-            # Transcribe extracted audio
-            return await transcribe_audio(
+            # Transcribe the extracted audio
+            audio_request = TranscribeRequest(
                 file_path=tmp_audio_path,
-                language=language,
+                language=request.language,
             )
+            return await transcribe_audio(audio_request)
 
         finally:
             if os.path.exists(tmp_audio_path):
-                os.remove(tmp_audio_path)
+                try:
+                    os.remove(tmp_audio_path)
+                except:
+                    pass
 
     except subprocess.CalledProcessError as e:
-        return [
-            TextContent(
-                type="text",
-                text=f"Error: Failed to extract audio from video: {e.stderr.decode() if e.stderr else str(e)}",
-            )
-        ]
+        stderr = e.stderr.decode() if e.stderr else str(e)
+        return {
+            "error": f"Failed to extract audio from video: {stderr}",
+            "success": False,
+        }
     except Exception as e:
-        return [
-            TextContent(
-                type="text",
-                text=f"Error: {str(e)}",
-            )
-        ]
+        return {
+            "error": f"Video transcription failed: {str(e)}",
+            "success": False,
+        }
 
 
-@app.call_tool()
-async def list_supported_languages():
-    """List all supported language codes for transcription."""
-    lang_list = json.dumps(SUPPORTED_LANGUAGES, indent=2)
-    return [
-        TextContent(
-            type="text",
-            text=f"Supported languages ({len(SUPPORTED_LANGUAGES)}+):\n\n{lang_list}\n\nUse the language code (e.g., 'en', 'pt-BR', 'ja') as the language parameter.",
-        )
-    ]
-
-
-@app.list_tools()
-async def list_tools() -> list[Tool]:
-    return [
-        Tool(
-            name="transcribe_audio",
-            description="Transcribe an audio file to text using Google Cloud Speech-to-Text",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "Path to audio file (MP3, WAV, FLAC, OGG, M4A, etc.)",
-                    },
-                    "language": {
-                        "type": "string",
-                        "description": "Language code (e.g., 'en', 'pt-BR', 'ja'). Default: 'en'",
-                        "default": "en",
-                    },
-                },
-                "required": ["file_path"],
-            },
-        ),
-        Tool(
-            name="transcribe_video",
-            description="Transcribe a video file by extracting audio using Google Cloud Speech-to-Text",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "Path to video file (MP4, MOV, AVI, MKV, WebM, etc.)",
-                    },
-                    "language": {
-                        "type": "string",
-                        "description": "Language code (e.g., 'en', 'pt-BR', 'ja'). Default: 'en'",
-                        "default": "en",
-                    },
-                },
-                "required": ["file_path"],
-            },
-        ),
-        Tool(
-            name="list_supported_languages",
-            description="List all supported language codes for transcription",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-            },
-        ),
-    ]
+@app.post("/list_supported_languages")
+async def list_supported_languages(request: ListLanguagesRequest = None):
+    """List all supported language codes for transcription"""
+    return {
+        "languages": SUPPORTED_LANGUAGES,
+        "count": len(SUPPORTED_LANGUAGES),
+        "message": f"Supported {len(SUPPORTED_LANGUAGES)}+ languages. Use language codes like 'en', 'pt-BR', 'ja'",
+    }
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("MCP_HTTP_PORT", "8000"))
+    host = os.getenv("MCP_HOST", "0.0.0.0")
+    print(f"Starting Transcriber MCP server on {host}:{port}")
+    uvicorn.run(app, host=host, port=port)

@@ -1,4 +1,3 @@
-version: "3.8"
 
 services:
   # Google Workspace MCP — manages Docs, Sheets, Slides, Drive, Gmail, Calendar, etc.

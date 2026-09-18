@@ -27,15 +27,6 @@ echo "  Redirect URI: ${GOOGLE_OAUTH_REDIRECT_URI}"
 echo "  Tool Tier: ${TOOL_TIER}"
 echo "  Listening on ${MCP_HOST}:${MCP_HTTP_PORT}"
 
-# Add workspace_mcp_src to Python path and run the server
-export PYTHONPATH="/app/workspace_mcp_src:${PYTHONPATH}"
+# Run the main.py entry point with HTTP transport
 cd /app/workspace_mcp_src
-
-# Try running as module
-python -m google_workspace_mcp.server \
-    --http \
-    --host "${MCP_HOST}" \
-    --port "${MCP_HTTP_PORT}" \
-    --token-storage "${TOKEN_STORAGE_PATH}" || \
-# Fallback: try running server.py if module doesn't work
-python server.py
+python main.py --http --host "${MCP_HOST}" --port "${MCP_HTTP_PORT}"

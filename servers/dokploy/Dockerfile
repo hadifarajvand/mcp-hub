@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM node:22-slim
 
 WORKDIR /app
 
@@ -11,15 +11,9 @@ RUN apt-get update && apt-get install -y \
 # Clone dokploy-mcp repo
 RUN git clone https://github.com/gaqno/dokploy-mcp.git /app/dokploy_mcp_src
 
-# Check what's in the repo
-RUN ls -la /app/dokploy_mcp_src/ && cat /app/dokploy_mcp_src/requirements.txt 2>/dev/null || echo "No requirements.txt found"
-
-# Install dependencies from requirements if exists
-RUN if [ -f /app/dokploy_mcp_src/requirements.txt ]; then \
-      pip install --no-cache-dir -q -r /app/dokploy_mcp_src/requirements.txt; \
-    else \
-      pip install --no-cache-dir -q mcp fastapi uvicorn pydantic requests; \
-    fi
+# Install dependencies and build
+WORKDIR /app/dokploy_mcp_src
+RUN npm install --legacy-peer-deps && npm run build
 
 # Copy entrypoint
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh

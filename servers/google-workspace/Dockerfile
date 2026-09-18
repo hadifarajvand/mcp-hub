@@ -11,15 +11,9 @@ RUN apt-get update && apt-get install -y \
 # Clone workspace-mcp repo
 RUN git clone https://github.com/taylorwilsdon/google_workspace_mcp.git /app/workspace_mcp_src
 
-# Check what's in the repo
-RUN ls -la /app/workspace_mcp_src/ && cat /app/workspace_mcp_src/requirements.txt 2>/dev/null || echo "No requirements.txt found"
-
-# Install dependencies from requirements if exists
-RUN if [ -f /app/workspace_mcp_src/requirements.txt ]; then \
-      pip install --no-cache-dir -q -r /app/workspace_mcp_src/requirements.txt; \
-    else \
-      pip install --no-cache-dir -q mcp fastapi uvicorn pydantic requests google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client; \
-    fi
+# Install dependencies (repo has uv for dependency management)
+WORKDIR /app/workspace_mcp_src
+RUN pip install --no-cache-dir -q -e . || pip install --no-cache-dir -q fastapi uvicorn fastmcp google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client python-dotenv pyyaml
 
 # Create tokens directory for OAuth persistence
 RUN mkdir -p /app/tokens
