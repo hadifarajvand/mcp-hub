@@ -1,0 +1,233 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Transcriber MCP API",
+    "description": "Audio and video transcription service using Google Cloud Speech-to-Text",
+    "version": "1.0.0",
+    "contact": {
+      "name": "MCP Hub"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8002",
+      "description": "Local development server"
+    },
+    {
+      "url": "http://mcp.yourdomain.com/transcriber",
+      "description": "Production server"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health Check",
+        "description": "Check if the transcriber service is running and healthy",
+        "tags": ["Health"],
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "service": {
+                      "type": "string",
+                      "example": "transcriber-mcp"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/transcribe_audio": {
+      "post": {
+        "summary": "Transcribe Audio",
+        "description": "Transcribe an audio file to text using Google Cloud Speech-to-Text",
+        "tags": ["Transcription"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string",
+                    "description": "Path to audio file (MP3, WAV, FLAC, OGG, M4A, etc.)",
+                    "example": "/path/to/audio.wav"
+                  },
+                  "language": {
+                    "type": "string",
+                    "description": "Language code (e.g., 'en', 'pt-BR', 'ja')",
+                    "default": "en",
+                    "example": "en"
+                  }
+                },
+                "required": ["file_path"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transcription successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "transcript": {
+                      "type": "string",
+                      "description": "Transcribed text"
+                    },
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "confidence": {
+                      "type": "number",
+                      "description": "Average confidence score"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation error or transcription failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/transcribe_video": {
+      "post": {
+        "summary": "Transcribe Video",
+        "description": "Transcribe a video file by extracting audio using Google Cloud Speech-to-Text",
+        "tags": ["Transcription"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string",
+                    "description": "Path to video file (MP4, MOV, AVI, MKV, WebM, etc.)",
+                    "example": "/path/to/video.mp4"
+                  },
+                  "language": {
+                    "type": "string",
+                    "description": "Language code (e.g., 'en', 'pt-BR', 'ja')",
+                    "default": "en",
+                    "example": "en"
+                  }
+                },
+                "required": ["file_path"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transcription successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "transcript": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/list_supported_languages": {
+      "post": {
+        "summary": "List Supported Languages",
+        "description": "Get list of all supported languages for transcription",
+        "tags": ["Info"],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "List of supported languages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "languages": {
+                      "type": "object",
+                      "description": "Language codes mapped to language names",
+                      "example": {
+                        "en": "English",
+                        "pt-BR": "Portuguese (Brazil)",
+                        "ja": "Japanese"
+                      }
+                    },
+                    "count": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Transcription",
+      "description": "Audio and video transcription endpoints"
+    },
+    {
+      "name": "Info",
+      "description": "Information endpoints"
+    },
+    {
+      "name": "Health",
+      "description": "Health and status endpoints"
+    }
+  ]
+}

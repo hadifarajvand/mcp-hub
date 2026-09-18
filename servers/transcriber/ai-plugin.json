@@ -1,0 +1,19 @@
+{
+  "schema_version": "v1",
+  "name_for_human": "Transcriber",
+  "name_for_model": "transcriber_mcp",
+  "description_for_human": "Transcribe audio and video files using Google Cloud Speech-to-Text. Supports 20+ languages.",
+  "description_for_model": "AI plugin for transcribing audio and video files. Capable of recognizing speech in 20+ languages including English, Spanish, French, German, Italian, Portuguese, Russian, Japanese, Korean, Chinese, and more. Uses Google Cloud Speech-to-Text API for high-accuracy transcription.",
+  "auth": {
+    "type": "none"
+  },
+  "api": {
+    "type": "openapi",
+    "url": "http://localhost:8002/openapi.json"
+  },
+  "logo_url": "https://raw.githubusercontent.com/hadifarajvand/mcp-hub/master/docs/transcriber-logo.png",
+  "contact_email": "hadifarajvand3@gmail.com",
+  "legal_info_url": "https://github.com/hadifarajvand/mcp-hub/blob/master/LICENSE",
+  "HttpUrl": "http://localhost:8002",
+  "disabled": false
+}
