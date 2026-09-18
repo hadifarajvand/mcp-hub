@@ -1,0 +1,92 @@
+version: "3.8"
+
+services:
+  # Google Workspace MCP — manages Docs, Sheets, Slides, Drive, Gmail, Calendar, etc.
+  google-workspace:
+    build:
+      context: ./servers/google-workspace
+      dockerfile: Dockerfile
+    container_name: mcp-google-workspace
+    env_file:
+      - ./servers/google-workspace/.env
+    ports:
+      - "8001:8000"
+    volumes:
+      - google-workspace-tokens:/app/tokens
+    environment:
+      - MCP_HTTP_PORT=8000
+      - MCP_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.google-workspace.rule=PathPrefix(`/google-workspace`)"
+      - "traefik.http.services.google-workspace.loadbalancer.server.port=8000"
+
+  # Transcriber MCP — Google Speech-to-Text for audio/video transcription
+  transcriber:
+    build:
+      context: ./servers/transcriber
+      dockerfile: Dockerfile
+    container_name: mcp-transcriber
+    env_file:
+      - ./servers/transcriber/.env
+    ports:
+      - "8002:8000"
+    volumes:
+      - transcriber-cache:/app/cache
+    environment:
+      - MCP_HTTP_PORT=8000
+      - MCP_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.transcriber.rule=PathPrefix(`/transcriber`)"
+      - "traefik.http.services.transcriber.loadbalancer.server.port=8000"
+
+  # Dokploy MCP — manage Dokploy deployments, containers, databases, etc.
+  dokploy:
+    build:
+      context: ./servers/dokploy
+      dockerfile: Dockerfile
+    container_name: mcp-dokploy
+    env_file:
+      - ./servers/dokploy/.env
+    ports:
+      - "8003:8000"
+    environment:
+      - MCP_HTTP_PORT=8000
+      - MCP_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dokploy.rule=PathPrefix(`/dokploy`)"
+      - "traefik.http.services.dokploy.loadbalancer.server.port=8000"
+
+volumes:
+  google-workspace-tokens:
+    driver: local
+  transcriber-cache:
+    driver: local
+
+networks:
+  default:
+    name: mcp-hub-network
+    driver: bridge
