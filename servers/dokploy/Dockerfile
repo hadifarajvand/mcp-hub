@@ -8,15 +8,18 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone the dokploy-mcp repository
-RUN git clone https://github.com/gaqno/dokploy-mcp.git /app/vendor
+# Clone dokploy-mcp repo
+RUN git clone https://github.com/gaqno/dokploy-mcp.git /app/dokploy_mcp_src
 
-WORKDIR /app/vendor
+# Check what's in the repo
+RUN ls -la /app/dokploy_mcp_src/ && cat /app/dokploy_mcp_src/requirements.txt 2>/dev/null || echo "No requirements.txt found"
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -e .
-
-WORKDIR /app
+# Install dependencies from requirements if exists
+RUN if [ -f /app/dokploy_mcp_src/requirements.txt ]; then \
+      pip install --no-cache-dir -q -r /app/dokploy_mcp_src/requirements.txt; \
+    else \
+      pip install --no-cache-dir -q mcp fastapi uvicorn pydantic requests; \
+    fi
 
 # Copy entrypoint
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh

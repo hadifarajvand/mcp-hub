@@ -8,18 +8,21 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone the workspace-mcp repository
-RUN git clone https://github.com/taylorwilsdon/google_workspace_mcp.git /app/vendor
+# Clone workspace-mcp repo
+RUN git clone https://github.com/taylorwilsdon/google_workspace_mcp.git /app/workspace_mcp_src
 
-WORKDIR /app/vendor
+# Check what's in the repo
+RUN ls -la /app/workspace_mcp_src/ && cat /app/workspace_mcp_src/requirements.txt 2>/dev/null || echo "No requirements.txt found"
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -e .
+# Install dependencies from requirements if exists
+RUN if [ -f /app/workspace_mcp_src/requirements.txt ]; then \
+      pip install --no-cache-dir -q -r /app/workspace_mcp_src/requirements.txt; \
+    else \
+      pip install --no-cache-dir -q mcp fastapi uvicorn pydantic requests google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client; \
+    fi
 
 # Create tokens directory for OAuth persistence
 RUN mkdir -p /app/tokens
-
-WORKDIR /app
 
 # Copy entrypoint
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh

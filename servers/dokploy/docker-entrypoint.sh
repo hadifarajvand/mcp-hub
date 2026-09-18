@@ -23,9 +23,14 @@ echo "Starting Dokploy MCP server..."
 echo "  Dokploy URL: ${DOKPLOY_URL}"
 echo "  Listening on ${MCP_HOST}:${MCP_HTTP_PORT}"
 
-# Run the dokploy-mcp server with HTTP transport
-cd /app/vendor
+# Add dokploy_mcp_src to Python path and run the server
+export PYTHONPATH="/app/dokploy_mcp_src:${PYTHONPATH}"
+cd /app/dokploy_mcp_src
+
+# Try running as module
 python -m dokploy_mcp.server \
     --http \
     --host "${MCP_HOST}" \
-    --port "${MCP_HTTP_PORT}"
+    --port "${MCP_HTTP_PORT}" || \
+# Fallback: try running server.py if module doesn't work
+python server.py
