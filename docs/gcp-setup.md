@@ -1,13 +1,14 @@
-# Transcriber MCP — OpenAI Whisper Setup
+# Transcriber MCP — Google's Built-in Speech Recognition Setup
 
-The Transcriber MCP uses **OpenAI Whisper** for local speech recognition. **No credentials, no Google Cloud account, no API keys needed!**
+The Transcriber MCP uses **Google's built-in speech recognition** via pyTranscriber's Autosub module. **No credentials or setup needed!**
 
 ## How It Works
 
-- **Local Processing**: Whisper runs entirely on your server (no external API calls)
-- **Auto Model Caching**: First run downloads the model (~140MB), then cached for future use
-- **99+ Languages**: Supports automatic language detection or specify language
+- **Google's Services**: Uses Google's speech recognition services (via Translate/Speech APIs)
+- **No Auth Required**: Works without explicit API keys or service accounts
+- **99+ Languages**: Automatic language detection or specify language
 - **All Formats**: MP3, WAV, FLAC, OGG, M4A, MP4, MKV, WebM, and more
+- **Subtitle Support**: Output as plain text or SRT subtitles with timecodes
 
 ## Zero Setup Required
 
@@ -17,24 +18,18 @@ Just copy the `.env.example`:
 cp servers/transcriber/.env.example servers/transcriber/.env
 ```
 
-No credentials needed. The Dockerfile pre-caches the Whisper base model during build.
+No credentials needed. Use it immediately.
 
 ## Configuration
 
 Edit `servers/transcriber/.env`:
 
 ```bash
-# Whisper Model Size
-# Options: tiny (39M), base (140M), small (466M), medium (1.5G), large (2.9G)
-# Default: base (good balance, pre-cached)
-WHISPER_MODEL=base
-
-# Models directory (auto-managed, no action needed)
-WHISPER_MODELS_DIR=/app/whisper_models
-
 # HTTP server
 MCP_HTTP_PORT=8000
 MCP_HOST=0.0.0.0
+
+# That's it! No other configuration needed.
 ```
 
 ## Usage
@@ -42,11 +37,14 @@ MCP_HOST=0.0.0.0
 Once deployed:
 
 ```bash
-# Transcribe audio file
+# Transcribe audio file (returns text)
 # In Claude: "Please transcribe /path/to/audio.mp3 in English"
 
 # Transcribe video file (audio extracted automatically)
 # In Claude: "Transcribe /path/to/video.mp4"
+
+# Get subtitles instead of plain text
+# In Claude: "Transcribe /path/to/audio.mp3 output as SRT subtitles"
 
 # List supported languages
 # In Claude: "What languages does the transcriber support?"
@@ -54,90 +52,90 @@ Once deployed:
 
 ## Supported Languages
 
-Whisper supports 99+ languages including:
-- English (en)
-- Spanish (es)
+Supports 100+ languages including:
+- English (en, en-US, en-GB)
+- Spanish (es, es-ES, es-MX)
 - French (fr)
 - German (de)
 - Italian (it)
-- Portuguese (pt, pt-BR)
+- Portuguese (pt, pt-BR, pt-PT)
 - Russian (ru)
 - Japanese (ja)
 - Chinese (zh, zh-CN, zh-TW)
 - Korean (ko)
-- Arabic (ar)
+- Arabic (ar, ar-SA)
 - Hindi (hi)
+- Thai (th)
+- Turkish (tr)
+- Dutch (nl)
+- Polish (pl)
 - And many more...
-
-## Model Trade-offs
-
-| Model | Size | Speed | Quality | GPU RAM |
-|-------|------|-------|---------|---------|
-| tiny | 39M | Very Fast | Basic | 1GB |
-| base | 140M | Fast | Good | 2GB |
-| small | 466M | Medium | Better | 3GB |
-| medium | 1.5G | Slower | Very Good | 5GB |
-| large | 2.9G | Slowest | Excellent | 10GB |
 
 ## Docker Build
 
 The Dockerfile automatically:
 1. Installs FFmpeg (for video processing)
-2. Installs PyTorch with CUDA support (GPU enabled)
-3. Installs Whisper library
-4. Pre-caches the base model (~140MB download at build time)
+2. Installs pyTranscriber with Autosub (Google Speech)
+3. Installs MCP and HTTP server dependencies
 
 ```bash
 docker compose build transcriber
 ```
 
-First build takes ~5 minutes (downloads model). Subsequent builds use cached layer.
+Build is fast (1-2 minutes, no model downloads).
+
+## Output Formats
+
+### Plain Text (default)
+```
+This is the transcribed text from your audio file.
+```
+
+### SRT Subtitles
+```
+1
+00:00:00,000 --> 00:00:05,000
+This is the transcribed text from your audio file.
+```
 
 ## Troubleshooting
 
-### Transcription slow on CPU
-
-- GPU recommended for faster transcription
-- Docker includes CUDA support (pytorch/pytorch:2.1.0-cuda12.1-runtime image)
-- CPU transcription is 10x slower
-
-### "Whisper not available" error
+### "pyTranscriber Google Speech module not available" error
 
 - Check container logs: `docker logs mcp-transcriber`
 - Verify build completed successfully
 - Rebuild: `docker compose build --no-cache transcriber`
 
-### Out of memory during transcription
+### Network timeout during transcription
 
-- Reduce model size (use `WHISPER_MODEL=tiny` instead of `large`)
-- Increase Docker memory limit in compose or container settings
+- Google's speech services require internet connectivity
+- Check firewall allows outbound HTTPS to Google services
+- Retry the transcription
 
-### Supported format error
+### Unsupported audio format
 
 - Ensure FFmpeg is available (included in Dockerfile)
 - Check file is valid media format
+- Try converting to MP3: `ffmpeg -i input.wav -codec:a libmp3lame -q:a 2 output.mp3`
 
-## Advanced: GPU Acceleration
+### Language detection issues
 
-The container uses `pytorch/pytorch:2.1.0-cuda12.1-runtime`, which includes CUDA support.
+- Specify language explicitly instead of relying on auto-detection
+- Use language code (e.g., 'pt-BR' for Portuguese Brazil)
 
-For GPU acceleration:
-1. Ensure NVIDIA GPU drivers installed on host
-2. Install NVIDIA Docker runtime: https://github.com/NVIDIA/nvidia-docker
-3. Add to `docker-compose.yml`:
-   ```yaml
-   transcriber:
-     runtime: nvidia
-     environment:
-       - NVIDIA_VISIBLE_DEVICES=all
-   ```
+## What This Uses Under the Hood
+
+- **pyTranscriber**: Open-source transcription framework
+- **Autosub 0.4.0**: Google Translate/Speech API integration (no auth needed)
+- **FFmpeg**: Audio/video format handling
+- **Google Services**: Actual speech recognition
 
 ## No Costs
 
-Whisper is open-source and free. No billing, no API calls, no quotas.
+Google's speech services accessed this way are free. No billing, no API quotas, no credits needed.
 
 ## Support
 
-- [OpenAI Whisper GitHub](https://github.com/openai/whisper)
-- [Whisper Model Documentation](https://openai.com/research/whisper)
 - [pyTranscriber GitHub](https://github.com/raryelcostasouza/pyTranscriber)
+- [Autosub GitHub](https://github.com/BingLingGroup/autosub)
+- [FFmpeg Documentation](https://ffmpeg.org)

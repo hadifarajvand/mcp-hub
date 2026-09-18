@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Transcriber MCP Server — OpenAI Whisper via pyTranscriber
-Transcribes audio and video files locally using OpenAI Whisper.
-No credentials required — models cached locally after first download.
+Transcriber MCP Server — Google Speech Recognition via pyTranscriber
+Transcribes audio and video files using Google's built-in speech recognition.
+No credentials required — uses Google Translate/Speech services.
 """
 
 import os
@@ -17,26 +17,31 @@ from typing import Optional
 sys.path.insert(0, "/app/vendor")
 
 try:
-    import whisper
-    whisper_available = True
+    from pytranscriber.control.ctr_autosub import CtrAutosub
+    google_speech_available = True
 except ImportError:
-    print("Warning: Whisper not available yet (will be installed)")
-    whisper_available = False
+    print("Warning: pyTranscriber Autosub (Google Speech) not available yet")
+    google_speech_available = False
 
 from mcp.server import Server
 from mcp.types import Tool, TextContent, ToolResult
 
 app = Server("transcriber-mcp")
 
-# Supported languages (Whisper supports 99+ languages)
+# Supported languages (Google Speech-to-Text supports 100+ languages)
 SUPPORTED_LANGUAGES = {
     "en": "English",
+    "en-US": "English (US)",
+    "en-GB": "English (UK)",
     "es": "Spanish",
+    "es-ES": "Spanish (Spain)",
+    "es-MX": "Spanish (Mexico)",
     "fr": "French",
     "de": "German",
     "it": "Italian",
     "pt": "Portuguese",
     "pt-BR": "Portuguese (Brazil)",
+    "pt-PT": "Portuguese (Portugal)",
     "ru": "Russian",
     "ja": "Japanese",
     "ko": "Korean",
@@ -44,6 +49,7 @@ SUPPORTED_LANGUAGES = {
     "zh-CN": "Chinese (Simplified)",
     "zh-TW": "Chinese (Traditional)",
     "ar": "Arabic",
+    "ar-SA": "Arabic (Saudi Arabia)",
     "hi": "Hindi",
     "th": "Thai",
     "tr": "Turkish",
@@ -60,63 +66,34 @@ SUPPORTED_LANGUAGES = {
     "vi": "Vietnamese",
     "id": "Indonesian",
     "ms": "Malay",
+    "th": "Thai",
+    "uk": "Ukrainian",
 }
-
-# Model size (can be: tiny, base, small, medium, large)
-MODEL_SIZE = os.getenv("WHISPER_MODEL", "base")
-MODELS_DIR = os.getenv("WHISPER_MODELS_DIR", "/app/whisper_models")
-
-# Ensure models directory exists
-os.makedirs(MODELS_DIR, exist_ok=True)
-
-
-def load_whisper_model():
-    """Load Whisper model (downloads if needed)."""
-    try:
-        print(f"Loading Whisper model: {MODEL_SIZE}")
-        model = whisper.load_model(
-            MODEL_SIZE,
-            device="cuda" if _cuda_available() else "cpu",
-            download_root=MODELS_DIR,
-        )
-        return model
-    except Exception as e:
-        print(f"Error loading Whisper model: {e}")
-        raise
-
-
-def _cuda_available():
-    """Check if CUDA is available."""
-    try:
-        import torch
-        return torch.cuda.is_available()
-    except Exception:
-        return False
 
 
 @app.call_tool()
 async def transcribe_audio(
     file_path: str,
     language: str = "en",
-    verbose: bool = False,
+    output_format: str = "text",
 ) -> ToolResult:
     """
-    Transcribe an audio file using OpenAI Whisper.
+    Transcribe an audio file using Google's speech recognition.
 
     Args:
         file_path: Path to audio file (MP3, WAV, FLAC, OGG, M4A, etc.)
         language: Language code (e.g., 'en', 'pt-BR', 'ja'). Defaults to 'en'.
-        verbose: Show transcription progress. Defaults to False.
+        output_format: Output format: 'text' or 'srt' (subtitles). Defaults to 'text'.
 
     Returns:
-        Transcript text with timing information.
+        Transcript text or SRT subtitles.
     """
-    if not whisper_available:
+    if not google_speech_available:
         return ToolResult(
             content=[
                 TextContent(
                     type="text",
-                    text="Error: Whisper not available. Check container logs.",
+                    text="Error: pyTranscriber Google Speech module not available. Check container logs.",
                 )
             ],
             is_error=True,
@@ -134,42 +111,66 @@ async def transcribe_audio(
                 is_error=True,
             )
 
-        print(f"Transcribing audio: {file_path}")
-        model = load_whisper_model()
+        print(f"Transcribing audio with Google Speech: {file_path}")
 
-        result = model.transcribe(
-            file_path,
-            language=language,
-            verbose=verbose,
-        )
+        # Create output file paths
+        base_path = Path(file_path).stem
+        output_dir = Path(tempfile.gettempdir())
+        txt_output = str(output_dir / f"{base_path}.txt")
+        srt_output = str(output_dir / f"{base_path}.srt")
 
-        if not result or not result.get("text"):
-            return ToolResult(
-                content=[
-                    TextContent(
-                        type="text",
-                        text="No speech detected in audio file.",
-                    )
-                ],
-                is_error=False,
+        # Use Google Speech (Autosub) via pyTranscriber
+        try:
+            result = CtrAutosub.generate_subtitles(
+                source_path=file_path,
+                src_language=language,
+                outputTXT=txt_output,
+                outputSRT=srt_output,
             )
 
-        transcript = result["text"].strip()
-        segments_info = ""
-        if result.get("segments"):
-            segments_info = "\n\nDetailed segments:\n"
-            for seg in result["segments"]:
-                segments_info += f"[{seg['start']:.2f}s - {seg['end']:.2f}s] {seg['text']}\n"
-
-        return ToolResult(
-            content=[
-                TextContent(
-                    type="text",
-                    text=f"Transcript:\n\n{transcript}{segments_info}",
+            if result is None or result == -1:
+                return ToolResult(
+                    content=[
+                        TextContent(
+                            type="text",
+                            text="Error: Transcription failed or was canceled.",
+                        )
+                    ],
+                    is_error=True,
                 )
-            ],
-            is_error=False,
-        )
+
+            # Read the output file
+            if output_format == "srt" and os.path.exists(srt_output):
+                with open(srt_output, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                return ToolResult(
+                    content=[TextContent(type="text", text=content)],
+                    is_error=False,
+                )
+            elif os.path.exists(txt_output):
+                with open(txt_output, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                return ToolResult(
+                    content=[TextContent(type="text", text=content)],
+                    is_error=False,
+                )
+            else:
+                return ToolResult(
+                    content=[
+                        TextContent(
+                            type="text",
+                            text="No output generated.",
+                        )
+                    ],
+                    is_error=False,
+                )
+
+        finally:
+            # Cleanup temp files
+            if os.path.exists(txt_output):
+                os.remove(txt_output)
+            if os.path.exists(srt_output):
+                os.remove(srt_output)
 
     except Exception as e:
         return ToolResult(
@@ -182,10 +183,10 @@ async def transcribe_audio(
 async def transcribe_video(
     file_path: str,
     language: str = "en",
-    verbose: bool = False,
+    output_format: str = "text",
 ) -> ToolResult:
     """
-    Transcribe a video file by extracting audio using OpenAI Whisper.
+    Transcribe a video file by extracting audio using Google's speech recognition.
 
     Args:
         file_path: Path to video file (MP4, MOV, AVI, MKV, WebM, etc.)
@@ -195,12 +196,12 @@ async def transcribe_video(
     Returns:
         Transcript text with timing information.
     """
-    if not whisper_available:
+    if not google_speech_available:
         return ToolResult(
             content=[
                 TextContent(
                     type="text",
-                    text="Error: Whisper not available. Check container logs.",
+                    text="Error: pyTranscriber Google Speech module not available. Check container logs.",
                 )
             ],
             is_error=True,
@@ -247,7 +248,7 @@ async def transcribe_video(
             return await transcribe_audio(
                 file_path=tmp_audio_path,
                 language=language,
-                verbose=verbose,
+                output_format=output_format,
             )
 
         finally:
@@ -279,7 +280,7 @@ async def list_supported_languages() -> ToolResult:
         content=[
             TextContent(
                 type="text",
-                text=f"Supported languages ({len(SUPPORTED_LANGUAGES)}+):\n\n{lang_list}\n\nUse the language code (e.g., 'en', 'pt-BR', 'ja') as the language parameter.\n\nNote: Whisper supports 99+ languages total.",
+                text=f"Supported languages ({len(SUPPORTED_LANGUAGES)}+):\n\n{lang_list}\n\nUse the language code (e.g., 'en', 'pt-BR', 'ja') as the language parameter.\n\nNote: Google Speech-to-Text supports 100+ languages total.",
             )
         ],
         is_error=False,
@@ -291,7 +292,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="transcribe_audio",
-            description="Transcribe an audio file to text using OpenAI Whisper (local, no credentials needed)",
+            description="Transcribe an audio file to text using Google's built-in speech recognition (no credentials needed)",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -304,10 +305,10 @@ async def list_tools() -> list[Tool]:
                         "description": "Language code (e.g., 'en', 'pt-BR', 'ja'). Default: en",
                         "default": "en",
                     },
-                    "verbose": {
-                        "type": "boolean",
-                        "description": "Show transcription progress. Default: false",
-                        "default": False,
+                    "output_format": {
+                        "type": "string",
+                        "description": "Output format: 'text' for plain text or 'srt' for subtitle format. Default: text",
+                        "default": "text",
                     },
                 },
                 "required": ["file_path"],
@@ -315,7 +316,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="transcribe_video",
-            description="Transcribe a video file to text using OpenAI Whisper (extracts audio automatically)",
+            description="Transcribe a video file to text using Google's built-in speech recognition (extracts audio automatically)",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -328,10 +329,10 @@ async def list_tools() -> list[Tool]:
                         "description": "Language code (e.g., 'en', 'pt-BR', 'ja'). Default: en",
                         "default": "en",
                     },
-                    "verbose": {
-                        "type": "boolean",
-                        "description": "Show transcription progress. Default: false",
-                        "default": False,
+                    "output_format": {
+                        "type": "string",
+                        "description": "Output format: 'text' for plain text or 'srt' for subtitle format. Default: text",
+                        "default": "text",
                     },
                 },
                 "required": ["file_path"],
@@ -355,8 +356,6 @@ if __name__ == "__main__":
     host = os.getenv("MCP_HOST", "0.0.0.0")
 
     print(f"Starting Transcriber MCP server on {host}:{port}")
-    print(f"Whisper model: {MODEL_SIZE}")
-    print(f"Models directory: {MODELS_DIR}")
-    print(f"CUDA available: {_cuda_available()}")
+    print(f"Using Google's built-in speech recognition (via pyTranscriber)")
 
     uvicorn.run(app, host=host, port=port)
