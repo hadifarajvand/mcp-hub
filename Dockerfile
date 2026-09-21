@@ -1,25 +1,31 @@
-# Root-level Dockerfile for Dokploy deployment with Docker build type
-# Builds and runs docker-compose services
+# Root-level Dockerfile for Dokploy - Transcriber MCP (primary service)
+# Simplest MCP: works immediately, no credentials needed
+# Use this single service first, then add Google Workspace & Dokploy MCPs later
 
-FROM docker:24-dind
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install docker-compose and curl for health checks
-RUN apk add --no-cache docker-compose curl
+# Install system dependencies for audio/video processing
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy entire repository
-COPY . .
+# Copy and install Python dependencies
+COPY servers/transcriber/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Expose ports for all three MCP services
-EXPOSE 8001 8002 8003
+# Copy transcriber MCP server code
+COPY servers/transcriber/server.py .
+
+# Expose port
+EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8001/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
-# Set compose project name
-ENV COMPOSE_PROJECT_NAME=mcp-hub
-
-# Start services with docker-compose
-CMD ["sh", "-c", "dockerd-entrypoint.sh & sleep 3 && cd /app && docker-compose -f docker-compose.yml up"]
+# Run transcriber service (ready to use, no setup needed)
+CMD ["python", "-u", "server.py"]
