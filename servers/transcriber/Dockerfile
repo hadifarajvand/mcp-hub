@@ -2,17 +2,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Install system dependencies (ffmpeg needed for audio/video processing)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
-    git \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy pyTranscriber (cloned locally)
-COPY vendor /app/vendor
-
-# Copy requirements
+# Copy requirements first for better Docker layer caching
 COPY requirements.txt .
 
 # Install Python dependencies
@@ -23,7 +20,9 @@ COPY server.py .
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+# Extended start period for Whisper model download on first run (~140MB)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-CMD ["python", "server.py"]
+# Run with unbuffered output for better logging
+CMD ["python", "-u", "server.py"]

@@ -20,14 +20,14 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 60s
     restart: unless-stopped
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.google-workspace.rule=PathPrefix(`/google-workspace`)"
       - "traefik.http.services.google-workspace.loadbalancer.server.port=8000"
 
-  # Transcriber MCP — Google's built-in speech recognition for audio/video transcription (no credentials needed)
+  # Transcriber MCP — OpenAI Whisper for audio/video transcription (no credentials needed)
   transcriber:
     build:
       context: ./servers/transcriber
@@ -45,7 +45,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 180s
     restart: unless-stopped
     labels:
       - "traefik.enable=true"
@@ -70,7 +70,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 45s
     restart: unless-stopped
     labels:
       - "traefik.enable=true"
