@@ -13,7 +13,7 @@ code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 expect() { [ "$2" = "$3" ] && ok "$1" || bad "$1 (got $2, want $3)"; }
 
 echo "== Authentication =="
-for route in dokploy transcriber github google-workspace web; do
+for route in dokploy transcriber github google-workspace web latex; do
   expect "$route: no token -> 401"          "$(code -X POST $BASE/$route/mcp)" 401
   expect "$route: wrong token -> 401"       "$(code -X POST -H 'Authorization: Bearer wrong' $BASE/$route/mcp)" 401
   expect "$route: empty bearer -> 401"      "$(code -X POST -H 'Authorization: Bearer ' $BASE/$route/mcp)" 401
@@ -42,7 +42,7 @@ for t in "" "short" "has*star-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; do
 done
 
 echo "== Network isolation =="
-for s in dokploy transcriber github google-workspace web searxng dokploy-stub web-fixture; do
+for s in dokploy transcriber github google-workspace web searxng latex latex-worker dokploy-stub web-fixture; do
   [ -z "$($C port $s 2>/dev/null)" ] && ok "$s publishes no host port" || bad "$s publishes a host port"
 done
 for p in 3000 8000 8082; do
@@ -51,10 +51,15 @@ done
 gw=$($C ps -q gateway); pub=$(docker port $gw 2>/dev/null | grep -v '^8080/tcp -> 127.0.0.1:8080$' | grep -v '^$' || true)
 [ -z "$pub" ] && ok "gateway binds only 127.0.0.1:8080 in dev" || bad "unexpected gateway ports: $pub"
 net=$(docker network inspect mcp-hub_hub --format '{{.Internal}}' 2>/dev/null)
-echo "   (hub network internal flag: $net)"
+echo "   (hub network internal flag: $net; MCPs there need egress to GitHub/Google/Dokploy)"
+[ "$(docker network inspect mcp-hub_latexnet --format '{{.Internal}}' 2>/dev/null)" = true ] && ok "latexnet is an internal network (no egress)" || bad "latexnet is NOT internal"
+nets=$(docker inspect "$($C ps -q latex-worker)" --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}')
+[ "$nets" = "mcp-hub_latexnet " ] && ok "latex-worker is attached to latexnet only" || bad "latex-worker networks: $nets"
+nets=$(docker inspect "$($C ps -q web)" --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}')
+[ "$nets" = "mcp-hub_fetchnet " ] && ok "web is attached to fetchnet only" || bad "web networks: $nets"
 
 echo "== Container hardening =="
-for s in gateway dokploy github transcriber google-workspace web searxng; do
+for s in gateway dokploy github transcriber google-workspace web searxng latex latex-worker; do
   id=$($C ps -q $s)
   j=$(docker inspect $id --format '{{.Config.User}}|{{.HostConfig.CapDrop}}|{{.HostConfig.SecurityOpt}}|{{.HostConfig.ReadonlyRootfs}}|{{.HostConfig.Privileged}}')
   IFS='|' read -r user cap sec ro priv <<<"$j"
@@ -68,13 +73,13 @@ for s in gateway dokploy github transcriber google-workspace web searxng; do
 done
 
 echo "== Secret hygiene =="
-for img in mcp-hub-gateway mcp-hub-dokploy mcp-hub-github mcp-hub-transcriber mcp-hub-google-workspace mcp-hub-web; do
+for img in mcp-hub-gateway mcp-hub-dokploy mcp-hub-github mcp-hub-transcriber mcp-hub-google-workspace mcp-hub-web mcp-hub-latex mcp-hub-latex-worker; do
   hist=$(docker history --no-trunc $img 2>/dev/null)
   if grep -qF -- "$TOKEN" <<<"$hist"; then bad "$img history contains hub token"; else ok "$img history clean"; fi
 done
 # Capture output first: `grep -q` in a pipeline SIGPIPEs the producer, which under
 # pipefail turns a match into a false PASS.
-for s in gateway dokploy github transcriber google-workspace web searxng; do
+for s in gateway dokploy github transcriber google-workspace web searxng latex latex-worker; do
   logs=$($C logs $s 2>&1)
   if grep -qF -- "$TOKEN" <<<"$logs"; then bad "$s logs contain hub token"; else ok "$s logs have no hub token"; fi
 done

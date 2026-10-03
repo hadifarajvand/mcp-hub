@@ -55,6 +55,8 @@ async def main():
     await run("transcriber", ("list_languages", {}, lambda t: "en-US" in t))
     await run("transcriber", ("transcribe", {"audio_url": "http://169.254.169.254/x"},
                               lambda t: "non-public" in t or "Refusing" in t))
+    await run("web")
+    await run("latex", ("list_templates", {}, lambda t: "article" in t))
     await run("github")
     await run("google-workspace")
     print(f"\n{len(failures)} failure(s)")

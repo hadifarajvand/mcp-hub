@@ -5,6 +5,7 @@
 
 x-hardening: &hardening
   restart: unless-stopped
+  init: true          # PID 1 reaps children (otherwise defunct TeX processes pile up against the PID limit)
   security_opt:
     - no-new-privileges:true
   cap_drop:
@@ -33,6 +34,7 @@ services:
     networks:
       - hub
       - fetchnet
+      - latexnet
       - dokploy-network
     depends_on:
       - dokploy
@@ -40,6 +42,7 @@ services:
       - transcriber
       - google-workspace
       - web
+      - latex
     deploy:
       resources:
         limits: { cpus: "0.5", memory: 128M }
@@ -131,6 +134,43 @@ services:
       resources:
         limits: { cpus: "1.0", memory: 512M }
 
+  # LaTeX: API tier (workspace volume, no TeX) + sandbox worker (TeX, no data). Both on an
+  # `internal` network: no route to the internet, and no route to any other MCP.
+  latex:
+    <<: *hardening
+    build:
+      context: ./servers
+      dockerfile: latex/api/Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks: [latexnet]
+    volumes:
+      - latex-data:/data
+    environment:
+      LATEX_WORKER_URL: http://latex-worker:9100
+      LATEX_RETENTION_DAYS: ${LATEX_RETENTION_DAYS:-30}
+    depends_on:
+      - latex-worker
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+
+  latex-worker:
+    <<: *hardening
+    build:
+      context: ./servers
+      dockerfile: latex/worker/Dockerfile
+      args:
+        TEXLIVE_SCHEME: ${TEXLIVE_SCHEME:-medium}
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,uid=10001,gid=10001
+    networks: [latexnet]
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 2G, pids: 256 }
+
   google-workspace:
     <<: *hardening
     build: ./servers/google-workspace
@@ -153,9 +193,12 @@ services:
 
 volumes:
   google-workspace-credentials:
+  latex-data:
 
 networks:
   hub:
+  latexnet:        # LaTeX API + sandbox worker; `internal`: no internet, no other MCPs
+    internal: true
   fetchnet:        # services that fetch arbitrary internet URLs; isolated from trusted MCPs
   dokploy-network:
     external: true

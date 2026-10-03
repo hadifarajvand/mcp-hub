@@ -30,6 +30,24 @@ services:
       SSRF_ALLOW_CIDRS: 172.30.55.200/32
       WEB_RATE_PER_MIN: "1000"   # dev: the e2e suite makes many calls
 
+  latex:
+    environment:
+      LATEX_MAX_PROJECTS: "500"   # dev: the e2e suites create many projects
+    build:
+      context: ./servers
+      dockerfile: latex/api/Dockerfile
+      secrets:
+        - build_ca
+
+  latex-worker:
+    build:
+      context: ./servers
+      dockerfile: latex/worker/Dockerfile
+      args:
+        TEXLIVE_SCHEME: ${TEXLIVE_SCHEME:-medium}
+      secrets:
+        - build_ca
+
   web-fixture:
     build: ./tests/web-fixture
     networks:

@@ -20,6 +20,8 @@
 	handle_path /{args[0]}/* {
 		reverse_proxy {args[1]} {
 			header_up -Authorization
+			# Identity headers are set by the gateway only; never trust client-supplied ones.
+			header_up -X-Hub-Subject
 			header_up Host {upstream_hostport}
 			flush_interval -1
 		}
@@ -73,6 +75,7 @@
 		import mcp_route dokploy dokploy:3000
 		import mcp_route transcriber transcriber:8000
 		import mcp_route web web:8000
+		import mcp_route latex latex:8000
 		import mcp_route google-workspace google-workspace:8000
 
 		# github-mcp-server's HTTP mode authenticates to GitHub with the
