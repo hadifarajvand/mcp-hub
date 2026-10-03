@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end + hostile-input tests for the LaTeX MCP through the gateway (dev overlay).
 
-  MCP_HUB_TOKEN=... python tests/latex_e2e.py [base_url]
+  set -a; . ./.env; set +a; python tests/latex_e2e.py [base_url]
 
 Hostile tests plant CANARY files inside the worker container (readable by the TeX process, so only the
 sandbox stands between them and the output) and assert no marker ever reaches a result.
@@ -23,7 +23,8 @@ from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8080").rstrip("/")
-TOKEN = os.environ["MCP_HUB_TOKEN"]
+sys.path.insert(0, os.path.dirname(__file__))
+import hubclient  # noqa: E402
 COMPOSE = ["docker", "compose", "-f", "docker-compose.yml", "-f", "docker-compose.dev.yml"]
 failures = []
 RUN = str(int(time.time()))
@@ -48,7 +49,7 @@ def png(w=4, h=4):
 
 
 async def main():
-    http = httpx.AsyncClient(headers={"Authorization": f"Bearer {TOKEN}"}, timeout=240)
+    http = httpx.AsyncClient(auth=hubclient.HubAuth("latex"), timeout=240)
     async with Client(streamable_http_client(f"{BASE}/latex/mcp", http_client=http)) as c:
         async def call(name, args):
             r = await c.call_tool(name, args)

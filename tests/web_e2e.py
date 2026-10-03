@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end tests for the web MCP through the gateway (dev overlay: needs web-fixture).
 
-  MCP_HUB_TOKEN=... python tests/web_e2e.py [base_url]
+  set -a; . ./.env; set +a; python tests/web_e2e.py [base_url]
 """
 import asyncio
 import json
@@ -14,7 +14,8 @@ from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8080").rstrip("/")
-TOKEN = os.environ["MCP_HUB_TOKEN"]
+sys.path.insert(0, os.path.dirname(__file__))
+import hubclient  # noqa: E402
 FX = "http://172.30.55.200:8080"
 failures = []
 
@@ -26,7 +27,7 @@ def check(name, ok, detail=""):
 
 
 async def main():
-    http = httpx.AsyncClient(headers={"Authorization": f"Bearer {TOKEN}"}, timeout=90)
+    http = httpx.AsyncClient(auth=hubclient.HubAuth("web"), timeout=90)
     async with Client(streamable_http_client(f"{BASE}/web/mcp", http_client=http)) as c:
         async def call(name, args):
             r = await c.call_tool(name, args)

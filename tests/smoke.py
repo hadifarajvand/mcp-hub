@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Connectivity smoke test: real MCP client against every hub route.
 
-  MCP_HUB_TOKEN=... python tests/smoke.py [base_url]    (needs: pip install mcp==2.3.0)
+  set -a; . ./.env; set +a; python tests/smoke.py [base_url]   (real OAuth tokens via tests/hubclient.py)
 """
 import asyncio
 import json
@@ -13,7 +13,8 @@ from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8080").rstrip("/")
-TOKEN = os.environ["MCP_HUB_TOKEN"]
+sys.path.insert(0, os.path.dirname(__file__))
+import hubclient  # noqa: E402  (real OAuth: DCR + PKCE + owner login)
 failures = []
 
 
@@ -24,12 +25,12 @@ def check(name, ok, detail=""):
 
 
 async def _gh_unconfigured():
-    async with httpx.AsyncClient(headers={"Authorization": f"Bearer {TOKEN}"}) as h:
+    async with httpx.AsyncClient(auth=hubclient.HubAuth("github", ["github:read"])) as h:
         return (await h.get(f"{BASE}/github/mcp")).status_code == 503
 
 
 async def run(route, call=None):
-    http = httpx.AsyncClient(headers={"Authorization": f"Bearer {TOKEN}"}, timeout=60)
+    http = httpx.AsyncClient(auth=hubclient.HubAuth(route, ["github:read"] if route == "github" else None), timeout=60)
     try:
         transport = streamable_http_client(f"{BASE}/{route}/mcp", http_client=http)
         async with Client(transport) as c:

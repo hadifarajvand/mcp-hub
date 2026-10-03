@@ -1,11 +1,11 @@
 # MCP Hub gateway: the only service exposed to the outside world.
 #
-# Every request except /healthz and the Google OAuth browser callback must
-# carry "Authorization: Bearer <MCP_HUB_TOKEN>" (or MCP_HUB_TOKEN_2 during
-# rotation). The client's Authorization header is never forwarded upstream.
+# Every MCP route is protected by OAuth: Caddy asks hub-auth (forward_auth) to validate the bearer token,
+# check that it was issued for THAT route (audience) and carries a scope for it. Only then is the request
+# proxied, with the client's Authorization header removed and identity headers set by the gateway itself.
 #
-# To add an MCP: add one `import mcp_route <name> <service>:<port>` line below.
-# It is then served at https://<domain>/<name>/mcp
+# To add an MCP: add one `import mcp_route <name> <service>:<port>` line below, add the route and its scopes in
+# servers/hub-auth/hubauth/resources.py, and it is served at https://<domain>/<name>/mcp
 
 {
 	admin off
@@ -16,12 +16,31 @@
 	}
 }
 
+# Token check. NOTE: `copy_headers` only OVERWRITES a header when the auth response contains it; it does not remove a
+# client-supplied copy (verified with tests/gateway_failclosed.py). So identity headers are stripped first, inside a
+# `route` block so the order is guaranteed: nothing a client sends in X-Hub-* can survive to the upstream.
+(authed) {
+	route {
+		request_header -X-Hub-Subject
+		request_header -X-Hub-Client
+		request_header -X-Hub-Scopes
+		request_header -X-Hub-Readonly
+		request_header -X-Hub-Route
+		request_header -X-Hub-Client-IP
+		forward_auth hub-auth:9000 {
+			uri /verify
+			header_up X-Hub-Route {args[0]}
+			header_up X-Hub-Client-IP {client_ip}
+			copy_headers X-Hub-Subject X-Hub-Client X-Hub-Scopes X-Hub-Readonly
+		}
+	}
+}
+
 (mcp_route) {
 	handle_path /{args[0]}/* {
+		import authed {args[0]}
 		reverse_proxy {args[1]} {
 			header_up -Authorization
-			# Identity headers are set by the gateway only; never trust client-supplied ones.
-			header_up -X-Hub-Subject
 			header_up Host {upstream_hostport}
 			flush_interval -1
 		}
@@ -48,28 +67,29 @@
 	}
 
 	request_body {
-		max_size 25MB
+		max_size 64MB
 	}
 
 	route {
 		respond /healthz "ok" 200
 
-		# Google redirects the user's browser here after consent; it cannot
-		# carry our bearer token. The upstream validates the OAuth state.
+		# OAuth endpoints and discovery documents: public by definition. /verify is deliberately NOT here.
+		@oauth path /.well-known/oauth-authorization-server /.well-known/oauth-protected-resource/* /authorize /token /register /revoke /consent
+		handle @oauth {
+			reverse_proxy hub-auth:9000 {
+				header_up -X-Hub-Route
+				header_up X-Hub-Client-IP {client_ip}
+				flush_interval -1
+			}
+		}
+
+		# Google redirects the user's browser here after consent; it cannot carry our bearer token.
+		# The upstream validates the OAuth state itself.
 		handle /google-workspace/oauth2callback {
 			rewrite * /oauth2callback{query}
 			reverse_proxy google-workspace:8000 {
 				header_up -Authorization
 			}
-		}
-
-		@unauthorized {
-			not header Authorization "Bearer {$MCP_HUB_TOKEN}"
-			not header Authorization "Bearer {$MCP_HUB_TOKEN_2}"
-		}
-		handle @unauthorized {
-			header WWW-Authenticate `Bearer realm="mcp-hub"`
-			respond `{"error":"unauthorized"}` 401
 		}
 
 		import mcp_route dokploy dokploy:3000
@@ -78,17 +98,28 @@
 		import mcp_route latex latex:8000
 		import mcp_route google-workspace google-workspace:8000
 
-		# github-mcp-server's HTTP mode authenticates to GitHub with the
-		# bearer token it receives, so swap the hub token for the PAT here.
-		@github_off {
-			path /github /github/*
-			expression `"{$GITHUB_PERSONAL_ACCESS_TOKEN}" == ""`
-		}
-		respond @github_off `{"error":"github MCP not configured: set GITHUB_PERSONAL_ACCESS_TOKEN"}` 503
-
+		# github-mcp-server's HTTP mode authenticates to GitHub with the bearer token it receives, so after our
+		# OAuth check the gateway substitutes the PAT. Read/write follows the token's scope (hub-auth sets
+		# X-Hub-Readonly); every other client-supplied X-MCP-* control header is dropped.
 		handle_path /github/* {
+			import authed github
+			# Fail CLOSED: github-mcp-server treats a missing/empty X-MCP-Readonly as read-write (verified). Only an
+			# explicit "0" from hub-auth (a token holding github:write) lifts read-only; anything else stays read-only.
+			map {http.request.header.X-Hub-Readonly} {mcp_readonly} {
+				"0" "false"
+				default "true"
+			}
+			@github_off expression `"{$GITHUB_PERSONAL_ACCESS_TOKEN}" == ""`
+			respond @github_off `{"error":"github MCP not configured: set GITHUB_PERSONAL_ACCESS_TOKEN"}` 503
 			reverse_proxy github:8082 {
 				header_up Host {upstream_hostport}
+				header_up -X-MCP-Toolsets
+				header_up -X-MCP-Tools
+				header_up -X-MCP-Exclude-Tools
+				header_up -X-MCP-Features
+				header_up -X-MCP-Lockdown
+				header_up -X-MCP-Insiders
+				header_up X-MCP-Readonly {mcp_readonly}
 				header_up Authorization "Bearer {$GITHUB_PERSONAL_ACCESS_TOKEN}"
 				flush_interval -1
 			}

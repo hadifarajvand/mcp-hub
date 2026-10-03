@@ -30,6 +30,19 @@ services:
       SSRF_ALLOW_CIDRS: 172.30.55.200/32
       WEB_RATE_PER_MIN: "1000"   # dev: the e2e suite makes many calls
 
+  github:
+    environment:
+      GITHUB_READ_ONLY: "0"          # dev: exercise scope-based read/write end to end
+  hub-auth:
+    environment:
+      GITHUB_READ_ONLY: "0"
+      OAUTH_RATE_LIMIT_SCALE: "50"   # dev: the e2e suites register many clients from one IP
+    build:
+      context: ./servers
+      dockerfile: hub-auth/Dockerfile
+      secrets:
+        - build_ca
+
   latex:
     environment:
       LATEX_MAX_PROJECTS: "500"   # dev: the e2e suites create many projects
@@ -57,6 +70,8 @@ services:
   gateway:
     ports:
       - "127.0.0.1:8080:8080"
+    environment:
+      GITHUB_PERSONAL_ACCESS_TOKEN: ghp_fakefakefakefakefakefakefakefake1234   # dev: fake PAT, never leaves the sandbox
 
   dokploy:
     build:
