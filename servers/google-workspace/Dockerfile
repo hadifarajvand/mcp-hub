@@ -1,42 +1,29 @@
 FROM python:3.11-slim
 
-WORKDIR /app
+# Upstream: https://github.com/taylorwilsdon/google_workspace_mcp, pinned.
+# build_ca: optional CA for builds behind a TLS-intercepting proxy (see docker-compose.dev.yml)
+RUN --mount=type=secret,id=build_ca,required=false \
+    if [ -s /run/secrets/build_ca ]; then export PIP_CERT=/run/secrets/build_ca; fi; \
+    pip install --no-cache-dir workspace-mcp==2.0.0
 
-# Install system dependencies with minimal bloat
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    curl \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+RUN useradd --uid 10001 --create-home app \
+    && mkdir -p /data/credentials \
+    && chown -R app:app /data
 
-# Clone workspace-mcp repo (using --depth 1 for faster clone)
-RUN git clone --depth 1 https://github.com/taylorwilsdon/google_workspace_mcp.git /app/workspace_mcp_src
+# Behind the hub gateway the public callback is <PUBLIC_BASE_URL>/google-workspace/oauth2callback;
+# the gateway strips the prefix, so the server's own /oauth2callback route handles it.
+ENV PYTHONUNBUFFERED=1 \
+    WORKSPACE_MCP_PORT=8000 \
+    WORKSPACE_MCP_HOST=0.0.0.0 \
+    WORKSPACE_MCP_CREDENTIALS_DIR=/data/credentials \
+    WORKSPACE_MCP_DISABLE_LOCAL_FILES=true \
+    WORKSPACE_MCP_TOOL_TIER=core
 
-# Install Python dependencies
-WORKDIR /app/workspace_mcp_src
-RUN pip install --no-cache-dir -q -e . || pip install --no-cache-dir -q \
-    fastapi==0.104.1 \
-    uvicorn==0.24.0 \
-    fastmcp==0.5.0 \
-    google-auth==2.25.2 \
-    google-auth-oauthlib==1.2.0 \
-    google-auth-httplib2==0.2.0 \
-    google-api-python-client==2.104.0 \
-    python-dotenv==1.0.0 \
-    pyyaml==6.0.1
-
-# Create tokens directory for OAuth persistence
-RUN mkdir -p /app/tokens && chmod 755 /app/tokens
-
-# Copy entrypoint script
-COPY docker-entrypoint.sh /app/docker-entrypoint.sh
-RUN chmod +x /app/docker-entrypoint.sh
-
+USER app
+VOLUME /data/credentials
 EXPOSE 8000
 
-# Health check with increased start period for initial OAuth setup
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"
 
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
-CMD []
+CMD ["workspace-mcp", "--transport", "streamable-http", "--single-user"]

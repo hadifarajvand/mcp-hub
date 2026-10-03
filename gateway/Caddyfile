@@ -1,0 +1,95 @@
+# MCP Hub gateway: the only service exposed to the outside world.
+#
+# Every request except /healthz and the Google OAuth browser callback must
+# carry "Authorization: Bearer <MCP_HUB_TOKEN>" (or MCP_HUB_TOKEN_2 during
+# rotation). The client's Authorization header is never forwarded upstream.
+#
+# To add an MCP: add one `import mcp_route <name> <service>:<port>` line below.
+# It is then served at https://<domain>/<name>/mcp
+
+{
+	admin off
+	auto_https off
+	servers {
+		# Dokploy's Traefik sits in front; trust it for X-Forwarded-*.
+		trusted_proxies static private_ranges
+	}
+}
+
+(mcp_route) {
+	handle_path /{args[0]}/* {
+		reverse_proxy {args[1]} {
+			header_up -Authorization
+			header_up Host {upstream_hostport}
+			flush_interval -1
+		}
+	}
+}
+
+:8080 {
+	log {
+		output stdout
+		format filter {
+			wrap json
+			# Never log query strings: clients sometimes put secrets in them.
+			request>uri regexp \?.* ?REDACTED
+			request>headers>Authorization replace REDACTED
+			request>headers>Cookie replace REDACTED
+		}
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		Strict-Transport-Security "max-age=31536000"
+	}
+
+	request_body {
+		max_size 25MB
+	}
+
+	route {
+		respond /healthz "ok" 200
+
+		# Google redirects the user's browser here after consent; it cannot
+		# carry our bearer token. The upstream validates the OAuth state.
+		handle /google-workspace/oauth2callback {
+			rewrite * /oauth2callback{query}
+			reverse_proxy google-workspace:8000 {
+				header_up -Authorization
+			}
+		}
+
+		@unauthorized {
+			not header Authorization "Bearer {$MCP_HUB_TOKEN}"
+			not header Authorization "Bearer {$MCP_HUB_TOKEN_2}"
+		}
+		handle @unauthorized {
+			header WWW-Authenticate `Bearer realm="mcp-hub"`
+			respond `{"error":"unauthorized"}` 401
+		}
+
+		import mcp_route dokploy dokploy:3000
+		import mcp_route transcriber transcriber:8000
+		import mcp_route google-workspace google-workspace:8000
+
+		# github-mcp-server's HTTP mode authenticates to GitHub with the
+		# bearer token it receives, so swap the hub token for the PAT here.
+		@github_off {
+			path /github /github/*
+			expression `"{$GITHUB_PERSONAL_ACCESS_TOKEN}" == ""`
+		}
+		respond @github_off `{"error":"github MCP not configured: set GITHUB_PERSONAL_ACCESS_TOKEN"}` 503
+
+		handle_path /github/* {
+			reverse_proxy github:8082 {
+				header_up Host {upstream_hostport}
+				header_up Authorization "Bearer {$GITHUB_PERSONAL_ACCESS_TOKEN}"
+				flush_interval -1
+			}
+		}
+
+		respond `{"error":"not found"}` 404
+	}
+}

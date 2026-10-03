@@ -1,0 +1,49 @@
+# Local development / testing overlay. Never use in Dokploy.
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# Publishes the gateway on 127.0.0.1:8080 only, replaces Dokploy's external
+# network with a local one, and adds a fake Dokploy API to exercise tool calls.
+
+x-build-ca: &build-ca
+  secrets:
+    - build_ca
+
+services:
+  transcriber:
+    build:
+      context: ./servers/transcriber
+      <<: *build-ca
+
+  google-workspace:
+    build:
+      context: ./servers/google-workspace
+      <<: *build-ca
+
+  gateway:
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  dokploy:
+    build:
+      context: ./servers/dokploy
+      <<: *build-ca
+    environment:
+      DOKPLOY_URL: http://dokploy-stub:3000
+      DOKPLOY_API_KEY: stub-dokploy-api-key-for-local-tests
+    depends_on:
+      - dokploy-stub
+
+  dokploy-stub:
+    build: ./tests/dokploy-stub
+    networks:
+      - hub
+
+networks:
+  dokploy-network:
+    external: false
+    name: mcp-hub-dev-edge
+
+# Optional CA bundle for building behind a TLS-intercepting proxy.
+# Defaults to an empty file, which the Dockerfiles ignore.
+secrets:
+  build_ca:
+    file: ${BUILD_CA_FILE:-/dev/null}

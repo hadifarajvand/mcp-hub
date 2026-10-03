@@ -1,81 +1,113 @@
+# MCP Hub: deploy as a Dokploy "Compose" application.
+# Only `gateway` is reachable from outside (via Dokploy's Traefik, configured in
+# the Domains tab → service: gateway, port: 8080). No service publishes host ports.
+# Every MCP is served at https://<domain>/<name>/mcp behind a bearer token.
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  networks:
+    - hub
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
 
 services:
-  # Google Workspace MCP — manages Docs, Sheets, Slides, Drive, Gmail, Calendar, etc.
-  google-workspace:
-    build:
-      context: ./servers/google-workspace
-      dockerfile: Dockerfile
-    container_name: mcp-google-workspace
-    ports:
-      - "8001:8000"
-    volumes:
-      - google-workspace-tokens:/app/tokens
+  gateway:
+    <<: *hardening
+    build: ./gateway
+    read_only: true
+    tmpfs:
+      - /tmp
     environment:
-      - MCP_HTTP_PORT=8000
-      - MCP_HOST=0.0.0.0
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    restart: unless-stopped
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.google-workspace.rule=PathPrefix(`/google-workspace`)"
-      - "traefik.http.services.google-workspace.loadbalancer.server.port=8000"
+      MCP_HUB_TOKEN: ${MCP_HUB_TOKEN:?MCP_HUB_TOKEN is required}
+      MCP_HUB_TOKEN_2: ${MCP_HUB_TOKEN_2:-}
+      GITHUB_PERSONAL_ACCESS_TOKEN: ${GITHUB_PERSONAL_ACCESS_TOKEN:-}
+      XDG_DATA_HOME: /tmp
+      XDG_CONFIG_HOME: /tmp
+    networks:
+      - hub
+      - dokploy-network
+    depends_on:
+      - dokploy
+      - github
+      - transcriber
+      - google-workspace
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 128M }
 
-  # Transcriber MCP — OpenAI Whisper for audio/video transcription (no credentials needed)
-  transcriber:
-    build:
-      context: ./servers/transcriber
-      dockerfile: Dockerfile
-    container_name: mcp-transcriber
-    ports:
-      - "8002:8000"
-    environment:
-      - MCP_HTTP_PORT=8000
-      - MCP_HOST=0.0.0.0
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 180s
-    restart: unless-stopped
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.transcriber.rule=PathPrefix(`/transcriber`)"
-      - "traefik.http.services.transcriber.loadbalancer.server.port=8000"
-
-  # Dokploy MCP — manage Dokploy deployments, containers, databases, etc.
   dokploy:
-    build:
-      context: ./servers/dokploy
-      dockerfile: Dockerfile
-    container_name: mcp-dokploy
-    ports:
-      - "8003:8000"
+    <<: *hardening
+    build: ./servers/dokploy
+    read_only: true
+    tmpfs:
+      - /tmp
     environment:
-      - MCP_HTTP_PORT=8000
-      - MCP_HOST=0.0.0.0
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 45s
-    restart: unless-stopped
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.dokploy.rule=PathPrefix(`/dokploy`)"
-      - "traefik.http.services.dokploy.loadbalancer.server.port=8000"
+      DOKPLOY_URL: ${DOKPLOY_URL:-}
+      DOKPLOY_API_KEY: ${DOKPLOY_API_KEY:-}
+      # all | minimal | core | deploy | databases | git
+      DOKPLOY_TOOL_PRESET: ${DOKPLOY_TOOL_PRESET:-deploy}
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+
+  github:
+    <<: *hardening
+    build: ./servers/github
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      # Read-only unless explicitly switched off.
+      GITHUB_READ_ONLY: ${GITHUB_READ_ONLY:-1}
+      GITHUB_TOOLSETS: ${GITHUB_TOOLSETS:-default}
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+
+  transcriber:
+    <<: *hardening
+    build: ./servers/transcriber
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m
+    environment:
+      GOOGLE_CREDENTIALS_JSON: ${GOOGLE_CREDENTIALS_JSON:-}
+      TRANSCRIBER_MAX_INPUT_MB: ${TRANSCRIBER_MAX_INPUT_MB:-20}
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 768M }
+
+  google-workspace:
+    <<: *hardening
+    build: ./servers/google-workspace
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /home/app:uid=10001,gid=10001
+    volumes:
+      - google-workspace-credentials:/data/credentials
+    environment:
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}/google-workspace/oauth2callback
+      WORKSPACE_EXTERNAL_URL: ${PUBLIC_BASE_URL}/google-workspace
+      USER_GOOGLE_EMAIL: ${USER_GOOGLE_EMAIL:-}
+      WORKSPACE_MCP_TOOL_TIER: ${WORKSPACE_TOOL_TIER:-core}
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
 
 volumes:
-  google-workspace-tokens:
-    driver: local
+  google-workspace-credentials:
 
 networks:
-  default:
-    name: mcp-hub-network
-    driver: bridge
+  hub:
+  dokploy-network:
+    external: true
