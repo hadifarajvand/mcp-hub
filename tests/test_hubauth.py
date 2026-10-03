@@ -101,8 +101,8 @@ class Hub:
         nonce = re.search(r'name="nonce" value="([^"]+)"', page.text).group(1)
         return page, req, nonce
 
-    def decide(self, req, nonce, *, password=PASSWORD, totp=None, action="approve", ip=None):
-        return self.http.post("/consent", data={"req": req, "nonce": nonce, "password": password, "totp": totp or self.code(), "action": action},
+    def decide(self, req, nonce, *, password=PASSWORD, totp=None, action="approve", ip=None, confirm=True):
+        return self.http.post("/consent", data={"req": req, "nonce": nonce, "password": password, "totp": totp or self.code(), "action": action, **({"confirm_unverified": "yes"} if confirm else {})},
                               headers={"x-hub-client-ip": ip or self.ip()})
 
     def authorize(self, client_id, **kw):
@@ -620,3 +620,60 @@ def test_database_files_are_owner_only_even_when_they_pre_existed(tmp_path):
     os.chmod(path, 0o644)  # simulates a database left over on a reused volume
     Db(path)
     assert oct(os.stat(path).st_mode & 0o777) == "0o600"
+
+
+def test_unverified_applications_require_explicit_server_side_confirmation(hub):
+    cid = hub.register(redirect="https://attacker.example/cb", name="Totally Legit").json()["client_id"]
+    r, _, _ = hub.start(cid, redirect="https://attacker.example/cb")
+    page, req, nonce = hub.consent_fields(r)
+    assert 'name="confirm_unverified"' in page.text and "required" in page.text
+    refused = hub.decide(req, nonce, confirm=False)  # correct password + fresh TOTP, but no confirmation
+    assert refused.status_code == 400 and "tick the box" in refused.text
+    assert hub.decide(req, nonce, confirm=True).status_code == 303  # same request is still usable afterwards
+
+
+def test_verified_applications_are_not_asked_to_confirm(hub):
+    cid = hub.register(redirect=CB).json()["client_id"]
+    page, req, nonce = hub.consent_fields(hub.start(cid)[0])
+    assert "confirm_unverified" not in page.text
+    assert hub.decide(req, nonce, confirm=False).status_code == 303
+
+
+def test_the_confirmation_does_not_burn_the_totp_code_or_count_as_a_failed_login(hub):
+    cid = hub.register(redirect="https://attacker.example/cb").json()["client_id"]
+    page, req, nonce = hub.consent_fields(hub.start(cid, redirect="https://attacker.example/cb")[0])
+    ip, code = hub.ip(), hub.code()
+    assert hub.decide(req, nonce, totp=code, ip=ip, confirm=False).status_code == 400
+    assert hub.decide(req, nonce, totp=code, ip=ip, confirm=True).status_code == 303
+
+
+@pytest.mark.parametrize("bad", ["*", "https://*", "https://*/x", "http://evil.example/cb", "https://claude.ai*", "https://a.example/*/b/*",
+                                 "javascript:*", "https://a.example/cb,*", "ftp://a.example/cb"])
+def test_dangerous_redirect_allowlists_fail_closed_at_startup(bad, monkeypatch, capsys):
+    for k, v in {"PUBLIC_BASE_URL": "https://mcp.example.com", "HUB_OWNER_PASSWORD_HASH": HASH, "HUB_OWNER_TOTP_SECRET": TOTP_SECRET, "OAUTH_REDIRECT_ALLOWLIST": bad}.items():
+        monkeypatch.setenv(k, v)
+    with pytest.raises(SystemExit):
+        Settings.from_env()
+    assert "OAUTH_REDIRECT_ALLOWLIST" in capsys.readouterr().err
+
+
+def test_sane_redirect_allowlists_are_accepted(monkeypatch):
+    for k, v in {"PUBLIC_BASE_URL": "https://mcp.example.com", "HUB_OWNER_PASSWORD_HASH": HASH, "HUB_OWNER_TOTP_SECRET": TOTP_SECRET,
+                 "OAUTH_REDIRECT_ALLOWLIST": "https://claude.ai/api/mcp/auth_callback,https://chatgpt.com/connector/oauth/*,http://127.0.0.1:8080/cb"}.items():
+        monkeypatch.setenv(k, v)
+    assert len(Settings.from_env().redirect_allowlist) == 3
+
+
+def test_pending_authorization_requests_are_capped():
+    h = Hub(max_pending_requests=3)
+    cid = h.register().json()["client_id"]
+    outcomes = [h.start(cid)[0].headers["location"] for _ in range(5)]
+    assert sum("/consent?req=" in o for o in outcomes) == 3 and sum("temporarily_unavailable" in o for o in outcomes) == 2
+
+
+@pytest.mark.parametrize("uri,local", [("http://127.0.0.1:53682/callback", True), ("http://localhost:9/cb", True), ("http://[::1]:7/cb", True),
+                                       ("https://127.0.0.1/cb", False), ("https://localhost/cb", False), ("https://attacker.example/cb", False)])
+def test_only_genuine_loopback_http_redirects_count_as_local(hub, uri, local):
+    cid = hub.register(redirect=uri).json()["client_id"]
+    page, _, _ = hub.consent_fields(hub.start(cid, redirect=uri)[0])
+    assert ("confirm_unverified" not in page.text) == local, uri

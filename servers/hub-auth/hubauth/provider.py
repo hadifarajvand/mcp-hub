@@ -48,6 +48,9 @@ class HubProvider:
 
     def _is_verified(self, uris: list[str]) -> bool:
         def match(u: str) -> bool:
+            p = urlsplit(u)
+            if p.scheme == "http" and p.hostname in LOOPBACK:
+                return True  # RFC 8252: a loopback redirect delivers the code only to a process on the owner's own machine
             return any(u == pat or (pat.endswith("*") and u.startswith(pat[:-1])) for pat in self.s.redirect_allowlist)
         return bool(uris) and all(match(u) for u in uris)
 
@@ -100,6 +103,9 @@ class HubProvider:
         for s in scopes:
             if s not in res.scopes:
                 raise AuthorizeError("invalid_scope", f"scope {s!r} is not offered by this resource")
+        if self.db.one("SELECT COUNT(*) AS n FROM pending WHERE expires_at>?", (time.time(),))["n"] >= self.s.max_pending_requests:
+            audit("authorize_rejected", reason="too_many_pending")
+            raise AuthorizeError("temporarily_unavailable", "too many authorization requests in progress; try again shortly")
         req_id, nonce = new_secret("req_"), new_secret("n_")
         now = time.time()
         self.db.x("INSERT INTO pending(req_id, nonce, client_id, params_json, resource, scopes_json, created_at, expires_at) VALUES(?,?,?,?,?,?,?,?)",

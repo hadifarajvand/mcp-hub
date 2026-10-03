@@ -50,12 +50,14 @@ def consent(*, req_id: str, nonce: str, client_name: str, client_id: str, verifi
     dest = p.netloc or f"{p.scheme}:// (app)"
     items = "".join(f'<li class="{"sens" if s in res.sensitive else ""}">{e(res.scopes[s])}<br><span class="muted"><code>{e(s)}</code></span></li>' for s in scopes)
     sensitive = [s for s in scopes if s in res.sensitive]
-    trust = ('<div class="card ok"><strong>Recognised application</strong><br>This redirect address is on your allow-list.</div>' if verified else
+    trust = ('<div class="card ok"><strong>Recognised application</strong><br>This redirect address is on your allow-list or is a program on your own computer.</div>' if verified else
              '<div class="card warn"><strong>Unverified application.</strong> Its redirect address is <em>not</em> on your allow-list. '
              'Continue only if <em>you</em> just started this connection yourself.</div>')
     danger = ('<div class="card warn"><strong>High-impact access.</strong> This lets the application make changes for you, '
               'not just read. Approve only if you trust it completely.</div>') if sensitive else ""
     err = f'<div class="card warn" role="alert">{e(error)}</div>' if error else ""
+    confirm = "" if verified else ('<p><label><input type="checkbox" name="confirm_unverified" value="yes" required> '
+                                   'I started this connection myself and I recognise the destination shown above.</label></p>')
     body = f"""
 <h1>Authorize access</h1>
 <p><strong>{e(client_name)}</strong> is asking to use <strong>{e(res.title)}</strong> on your MCP hub.</p>
@@ -68,7 +70,7 @@ def consent(*, req_id: str, nonce: str, client_name: str, client_id: str, verifi
 <input type="hidden" name="req" value="{e(req_id)}"><input type="hidden" name="nonce" value="{e(nonce)}">
 <label for="pw">Owner password</label><input id="pw" type="password" name="password" autocomplete="current-password" required maxlength="1024">
 <label for="totp">6-digit authenticator code</label><input id="totp" type="text" name="totp" inputmode="numeric" pattern="[0-9 ]{{6,7}}" autocomplete="one-time-code" required maxlength="7">
-<p><button class="go" type="submit" name="action" value="approve">Approve</button> <button type="submit" name="action" value="deny" formnovalidate>Deny</button></p>
+{confirm}<p><button class="go" type="submit" name="action" value="approve">Approve</button> <button type="submit" name="action" value="deny" formnovalidate>Deny</button></p>
 </form>
 <p class="muted">Approving needs your password and a fresh authenticator code every time. You can revoke access later with <code>python -m hubauth revoke-client</code>.</p>"""
     return respond("Authorize access", body, status)

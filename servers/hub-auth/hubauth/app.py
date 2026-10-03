@@ -111,6 +111,10 @@ def build_app(settings: Settings | None = None) -> Starlette:
             return RedirectResponse(url, status_code=303) if url else pages.message("Request expired", "Nothing to deny.")
         if action != "approve":
             return pages.message("Bad request", "Unknown action.")
+        if not provider.client_verified(p["client_id"]) and str(form.get("confirm_unverified", "")) != "yes":
+            # Open client registration means anyone can send you to this page. For an application that is not on the
+            # allow-list the owner must explicitly confirm they started it (checked server-side, before any credential).
+            return render(p, "This application is not on your allow-list: tick the box to confirm you started this connection yourself.", 400)
         # Lockout is checked BEFORE any credential is evaluated.
         if limiter.count(f"loginfail:{ip}", LOGIN_WINDOW) >= LOGIN_FAILS_PER_IP or limiter.count("loginfail:global", LOGIN_WINDOW) >= LOGIN_FAILS_GLOBAL:
             wait = max(limiter.retry_after(f"loginfail:{ip}", LOGIN_WINDOW), limiter.retry_after("loginfail:global", LOGIN_WINDOW))

@@ -37,6 +37,7 @@ class Settings:
     code_ttl: int = 60
     pending_ttl: int = 600
     max_pending_clients: int = 100
+    max_pending_requests: int = 500
     client_gc_hours: int = 24
     redirect_allowlist: tuple[str, ...] = ()
     custom_schemes: tuple[str, ...] = ()
@@ -64,6 +65,12 @@ class Settings:
         default_redirects = ("https://claude.ai/api/mcp/auth_callback", "https://claude.com/api/mcp/auth_callback",
                              "https://chatgpt.com/connector/oauth/*", "https://chatgpt.com/connector_platform_oauth_redirect")
         allow = tuple(x.strip() for x in os.getenv("OAUTH_REDIRECT_ALLOWLIST", ",".join(default_redirects)).split(",") if x.strip())
+        for pat in allow:
+            wildcard_ok = re.fullmatch(r"https://[A-Za-z0-9.\-]+(:\d+)?/[^*]*\*", pat)
+            exact_ok = "*" not in pat and re.fullmatch(r"(https://[A-Za-z0-9.\-]+(:\d+)?/\S*|http://(127\.0\.0\.1|localhost)(:\d+)?/\S*)", pat)
+            if not (wildcard_ok or exact_ok):
+                fatal(f"OAUTH_REDIRECT_ALLOWLIST entry {pat!r} is not allowed: use an exact https URL, or https://host/path-prefix/* "
+                      "(a bare * would mark every client as verified)")
         schemes = tuple(x.strip().lower() for x in os.getenv("OAUTH_CUSTOM_SCHEMES", "cursor,vscode,vscode-insiders").split(",") if x.strip())
         return cls(
             base_url=base, db_path=os.getenv("HUBAUTH_DB", "/data/hubauth.db"), owner_hash=owner_hash, owner_totp_secret=secret,

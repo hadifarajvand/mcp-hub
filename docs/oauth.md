@@ -21,7 +21,7 @@ client ── Authorization: Bearer <token> ──> gateway asks hub-auth: valid
 | Scopes are enforced | A token carries only the scopes you approved (e.g. `github:read`). Refresh can narrow, never widen. |
 | Revocation is immediate | Every request is checked by hub-auth, so `/revoke` or the CLI takes effect on the next call. |
 | Upstream never sees client tokens | The gateway strips `Authorization`, strips every client-supplied `X-Hub-*` identity header, and sets identity itself. |
-| Clients cannot be tricked into leaking codes | Exact redirect-URI match; only https, loopback http, or allow-listed app schemes may register; unknown redirect hosts get an "unverified application" warning on the consent screen. |
+| Clients cannot be tricked into leaking codes | Exact redirect-URI match; only https, loopback http, or allow-listed app schemes may register. A client whose redirect is neither on your allow-list nor a loopback address (a program on your own computer) shows an "unverified application" warning **and cannot be approved without ticking a confirmation box that you started the connection yourself** (enforced server-side). A bad `OAUTH_REDIRECT_ALLOWLIST` (e.g. `*`) stops hub-auth from starting. |
 
 ## Scopes
 
@@ -51,8 +51,8 @@ Add one connector per MCP: each is a separate authorization (that is the audienc
 ## Limits (read these)
 
 - **Dynamic Client Registration is open**, because claude.ai and ChatGPT need it. Anyone can register a client and send you
-  to the consent page. The defences are the password + TOTP gate, the unverified-application warning, registration
-  rate limits and a cap on unused registrations. Approve only connections *you* started.
+  to the consent page. The defences are the password + TOTP gate, the unverified-application warning and mandatory confirmation,
+  registration rate limits, and caps on unused registrations and in-flight authorization requests. Approve only connections *you* started.
 - Sign-in lockout is a deliberate trade-off: someone who can reach `/consent` can lock *new* authorizations for ~15 minutes.
   Existing tokens are unaffected.
 - Not implemented: Client ID Metadata Documents (ChatGPT also supports DCR, which is used), the client-credentials grant
