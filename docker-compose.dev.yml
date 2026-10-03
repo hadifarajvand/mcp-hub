@@ -10,7 +10,8 @@ x-build-ca: &build-ca
 services:
   transcriber:
     build:
-      context: ./servers/transcriber
+      context: ./servers
+      dockerfile: transcriber/Dockerfile
       <<: *build-ca
 
   google-workspace:

@@ -115,7 +115,7 @@ PY
 }
 for u in http://169.254.169.254/latest/meta-data http://dokploy:3000/health http://dokploy-stub:3000/api/project.all http://127.0.0.1:8000/health http://gateway:8080/healthz "http://[::1]:8000/" file:///etc/passwd; do
   res=$(ssrf "$u")
-  if grep -qE 'Refusing|Only http|Cannot resolve' <<<"$res"; then ok "SSRF blocked: $u"; else bad "SSRF NOT blocked: $u"; fi
+  if grep -qE 'Refusing|Only http|Cannot resolve|not allowed|credentials' <<<"$res"; then ok "SSRF blocked: $u"; else bad "SSRF NOT blocked: $u"; fi
 done
 
 echo; [ $fails -eq 0 ] && echo "ALL SECURITY CHECKS PASSED" || echo "$fails SECURITY CHECK(S) FAILED"

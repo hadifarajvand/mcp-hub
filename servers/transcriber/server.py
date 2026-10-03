@@ -12,14 +12,11 @@ Credentials, in order of precedence:
 import asyncio
 import base64
 import binascii
-import ipaddress
 import json
 import os
-import socket
 import subprocess
 import tempfile
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
 
 import httpx
 from google.cloud import speech
@@ -29,8 +26,9 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from ssrf import SSRFError, read_capped, safe_stream  # shared SSRF guard (servers/common/ssrf.py)
+
 MAX_INPUT_BYTES = int(os.getenv("TRANSCRIBER_MAX_INPUT_MB", "20")) * 1024 * 1024
-MAX_REDIRECTS = 3
 DOWNLOAD_TIMEOUT = 60
 FFMPEG_TIMEOUT = 300
 SAMPLE_RATE = 16000
@@ -89,45 +87,15 @@ def _speech_client() -> speech.SpeechClient:
     )
 
 
-def _assert_public_host(host: str, port: int) -> None:
-    """Reject URLs that resolve to private, loopback, link-local or other non-public addresses.
-
-    Stops the server being used to reach Docker-internal services (dokploy:3000,
-    the gateway) or cloud metadata endpoints.
-    """
+async def _download(url: str, dest: Path) -> None:
+    """Fetch `url` into `dest` through the shared SSRF guard (pinned IP, re-validated redirects)."""
     try:
-        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except socket.gaierror as e:
-        raise TranscriberError(f"Cannot resolve host {host!r}") from e
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if not ip.is_global:
-            raise TranscriberError(f"Refusing to fetch from non-public address ({host})")
-
-
-def _download(url: str, dest: Path) -> None:
-    for _ in range(MAX_REDIRECTS + 1):
-        parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname:
-            raise TranscriberError("Only http(s) URLs are supported")
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        _assert_public_host(parsed.hostname, port)
-
-        with httpx.stream("GET", url, follow_redirects=False, timeout=DOWNLOAD_TIMEOUT) as resp:
-            if resp.is_redirect:
-                url = urljoin(url, resp.headers.get("location", ""))
-                continue
+        async with safe_stream(url, timeout=DOWNLOAD_TIMEOUT) as resp:
             if resp.status_code != 200:
                 raise TranscriberError(f"Download failed with HTTP {resp.status_code}")
-            size = 0
-            with dest.open("wb") as f:
-                for chunk in resp.iter_bytes():
-                    size += len(chunk)
-                    if size > MAX_INPUT_BYTES:
-                        raise TranscriberError(f"File exceeds {MAX_INPUT_BYTES // (1024 * 1024)} MB limit")
-                    f.write(chunk)
-            return
-    raise TranscriberError("Too many redirects")
+            dest.write_bytes(await read_capped(resp, MAX_INPUT_BYTES))
+    except SSRFError as e:
+        raise TranscriberError(str(e)) from e
 
 
 def _to_pcm(src: Path) -> bytes:
@@ -179,13 +147,18 @@ def _recognize(pcm: bytes, language: str, punctuation: bool) -> dict:
     }
 
 
-def _transcribe_sync(audio_url: str | None, audio_base64: str | None, language: str, punctuation: bool) -> dict:
+def _process_sync(src: Path, language: str, punctuation: bool) -> dict:
+    pcm = _to_pcm(src)
+    return _recognize(pcm, language, punctuation)
+
+
+async def _transcribe(audio_url: str | None, audio_base64: str | None, language: str, punctuation: bool) -> dict:
     if bool(audio_url) == bool(audio_base64):
         raise TranscriberError("Provide exactly one of audio_url or audio_base64")
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / "input"
         if audio_url:
-            _download(audio_url, src)
+            await _download(audio_url, src)
         else:
             try:
                 data = base64.b64decode(audio_base64, validate=True)
@@ -194,8 +167,7 @@ def _transcribe_sync(audio_url: str | None, audio_base64: str | None, language: 
             if len(data) > MAX_INPUT_BYTES:
                 raise TranscriberError(f"File exceeds {MAX_INPUT_BYTES // (1024 * 1024)} MB limit")
             src.write_bytes(data)
-        pcm = _to_pcm(src)
-    return _recognize(pcm, language, punctuation)
+        return await asyncio.to_thread(_process_sync, src, language, punctuation)
 
 
 def _allowed_hosts() -> list[str]:
@@ -226,7 +198,7 @@ async def transcribe(
     Audio longer than about 5 minutes is rejected.
     """
     try:
-        return await asyncio.to_thread(_transcribe_sync, audio_url, audio_base64, language, punctuation)
+        return await _transcribe(audio_url, audio_base64, language, punctuation)
     except TranscriberError as e:
         return {"error": str(e)}
     except httpx.HTTPError as e:
