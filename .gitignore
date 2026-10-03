@@ -71,3 +71,10 @@ temp/
 secrets/
 .secrets/
 **/secrets/*
+
+# Private keys / certificates — never commit
+*.pfx
+*.p12
+*.pem
+*.key
+certs/

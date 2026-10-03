@@ -1,81 +1,229 @@
+# MCP Hub: deploy as a Dokploy "Compose" application.
+# Only `gateway` is reachable from outside (via Dokploy's Traefik, configured in
+# the Domains tab → service: gateway, port: 8080). No service publishes host ports.
+# Every MCP is served at https://<domain>/<name>/mcp behind OAuth 2.1 (hub-auth).
+
+x-hardening: &hardening
+  restart: unless-stopped
+  init: true          # PID 1 reaps children (otherwise defunct TeX processes pile up against the PID limit)
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  networks:
+    - hub
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
 
 services:
-  # Google Workspace MCP — manages Docs, Sheets, Slides, Drive, Gmail, Calendar, etc.
-  google-workspace:
+  gateway:
+    <<: *hardening
+    build: ./gateway
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      GITHUB_PERSONAL_ACCESS_TOKEN: ${GITHUB_PERSONAL_ACCESS_TOKEN:-}
+      XDG_DATA_HOME: /tmp
+      XDG_CONFIG_HOME: /tmp
+    networks:
+      - hub
+      - fetchnet
+      - latexnet
+      - authnet
+      - dokploy-network
+    depends_on:
+      - hub-auth
+      - dokploy
+      - github
+      - transcriber
+      - google-workspace
+      - web
+      - latex
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 128M }
+
+  # OAuth 2.1 authorization server + token verifier. Only the gateway can reach it (internal network).
+  hub-auth:
+    <<: *hardening
     build:
-      context: ./servers/google-workspace
-      dockerfile: Dockerfile
-    container_name: mcp-google-workspace
-    ports:
-      - "8001:8000"
+      context: ./servers
+      dockerfile: hub-auth/Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks: [authnet]
     volumes:
-      - google-workspace-tokens:/app/tokens
+      - hubauth-data:/data
     environment:
-      - MCP_HTTP_PORT=8000
-      - MCP_HOST=0.0.0.0
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    restart: unless-stopped
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.google-workspace.rule=PathPrefix(`/google-workspace`)"
-      - "traefik.http.services.google-workspace.loadbalancer.server.port=8000"
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required (e.g. https://mcp.example.com)}
+      HUB_OWNER_PASSWORD_HASH: ${HUB_OWNER_PASSWORD_HASH:?run scripts/gen-owner.sh and set HUB_OWNER_PASSWORD_HASH}
+      HUB_OWNER_TOTP_SECRET: ${HUB_OWNER_TOTP_SECRET:?run scripts/gen-owner.sh and set HUB_OWNER_TOTP_SECRET}
+      GITHUB_READ_ONLY: ${GITHUB_READ_ONLY:-1}   # must match the github service: gates whether github:write is offered at all
+      OAUTH_REDIRECT_ALLOWLIST: ${OAUTH_REDIRECT_ALLOWLIST:-https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,https://chatgpt.com/connector/oauth/*,https://chatgpt.com/connector_platform_oauth_redirect}
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 384M }
 
-  # Transcriber MCP — OpenAI Whisper for audio/video transcription (no credentials needed)
-  transcriber:
-    build:
-      context: ./servers/transcriber
-      dockerfile: Dockerfile
-    container_name: mcp-transcriber
-    ports:
-      - "8002:8000"
-    environment:
-      - MCP_HTTP_PORT=8000
-      - MCP_HOST=0.0.0.0
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 180s
-    restart: unless-stopped
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.transcriber.rule=PathPrefix(`/transcriber`)"
-      - "traefik.http.services.transcriber.loadbalancer.server.port=8000"
-
-  # Dokploy MCP — manage Dokploy deployments, containers, databases, etc.
   dokploy:
-    build:
-      context: ./servers/dokploy
-      dockerfile: Dockerfile
-    container_name: mcp-dokploy
-    ports:
-      - "8003:8000"
+    <<: *hardening
+    build: ./servers/dokploy
+    read_only: true
+    tmpfs:
+      - /tmp
     environment:
-      - MCP_HTTP_PORT=8000
-      - MCP_HOST=0.0.0.0
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 45s
-    restart: unless-stopped
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.dokploy.rule=PathPrefix(`/dokploy`)"
-      - "traefik.http.services.dokploy.loadbalancer.server.port=8000"
+      DOKPLOY_URL: ${DOKPLOY_URL:-}
+      DOKPLOY_API_KEY: ${DOKPLOY_API_KEY:-}
+      # all | minimal | core | deploy | databases | git
+      DOKPLOY_TOOL_PRESET: ${DOKPLOY_TOOL_PRESET:-deploy}
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+
+  github:
+    <<: *hardening
+    build: ./servers/github
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      # Read-only unless explicitly switched off.
+      GITHUB_READ_ONLY: ${GITHUB_READ_ONLY:-1}
+      GITHUB_TOOLSETS: ${GITHUB_TOOLSETS:-default}
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+
+  transcriber:
+    <<: *hardening
+    build:
+      context: ./servers
+      dockerfile: transcriber/Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m
+    networks: [fetchnet]
+    environment:
+      GOOGLE_CREDENTIALS_JSON: ${GOOGLE_CREDENTIALS_JSON:-}
+      TRANSCRIBER_MAX_INPUT_MB: ${TRANSCRIBER_MAX_INPUT_MB:-20}
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 768M }
+
+  # Web search + fetch. Lives on `fetchnet`, which cannot reach dokploy/github/workspace.
+  web:
+    <<: *hardening
+    build:
+      context: ./servers
+      dockerfile: web/Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks: [fetchnet]
+    environment:
+      SEARXNG_URL: http://searxng:8080
+      WEB_RESPECT_ROBOTS: ${WEB_RESPECT_ROBOTS:-true}
+      WEB_RATE_PER_MIN: ${WEB_RATE_PER_MIN:-60}
+    depends_on:
+      - searxng
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
+  searxng:
+    <<: *hardening
+    image: searxng/searxng:2026.10.2-19ffbcd30
+    user: "977:977"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/searxng:uid=977,gid=977
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    networks: [fetchnet]
+    environment:
+      GRANIAN_HOST: 0.0.0.0   # image default is :: (IPv6), which Docker bridge networks may lack
+    # Random per-start secret (only signs ephemeral state); then the image's own entrypoint.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - export SEARXNG_SECRET="$$(head -c 32 /dev/urandom | base64 | tr -dc A-Za-z0-9)"; exec /usr/local/searxng/entrypoint.sh
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
+  # LaTeX: API tier (workspace volume, no TeX) + sandbox worker (TeX, no data). Both on an
+  # `internal` network: no route to the internet, and no route to any other MCP.
+  latex:
+    <<: *hardening
+    build:
+      context: ./servers
+      dockerfile: latex/api/Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks: [latexnet]
+    volumes:
+      - latex-data:/data
+    environment:
+      LATEX_WORKER_URL: http://latex-worker:9100
+      LATEX_RETENTION_DAYS: ${LATEX_RETENTION_DAYS:-30}
+    depends_on:
+      - latex-worker
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+
+  latex-worker:
+    <<: *hardening
+    build:
+      context: ./servers
+      dockerfile: latex/worker/Dockerfile
+      args:
+        TEXLIVE_SCHEME: ${TEXLIVE_SCHEME:-medium}
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,uid=10001,gid=10001
+    networks: [latexnet]
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 2G, pids: 256 }
+
+  google-workspace:
+    <<: *hardening
+    build: ./servers/google-workspace
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /home/app:uid=10001,gid=10001
+    volumes:
+      - google-workspace-credentials:/data/credentials
+    environment:
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required}/google-workspace/oauth2callback
+      WORKSPACE_EXTERNAL_URL: ${PUBLIC_BASE_URL}/google-workspace
+      USER_GOOGLE_EMAIL: ${USER_GOOGLE_EMAIL:-}
+      WORKSPACE_MCP_TOOL_TIER: ${WORKSPACE_TOOL_TIER:-core}
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
 
 volumes:
-  google-workspace-tokens:
-    driver: local
+  hubauth-data:
+  google-workspace-credentials:
+  latex-data:
 
 networks:
-  default:
-    name: mcp-hub-network
-    driver: bridge
+  hub:
+  authnet:         # gateway <-> hub-auth only; `internal`: hub-auth has no egress and no other peers
+    internal: true
+  latexnet:        # LaTeX API + sandbox worker; `internal`: no internet, no other MCPs
+    internal: true
+  fetchnet:        # services that fetch arbitrary internet URLs; isolated from trusted MCPs
+  dokploy-network:
+    external: true

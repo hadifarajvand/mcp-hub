@@ -1,0 +1,104 @@
+# Local development / testing overlay. Never use in Dokploy.
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# Publishes the gateway on 127.0.0.1:8080 only, replaces Dokploy's external
+# network with a local one, and adds a fake Dokploy API to exercise tool calls.
+
+x-build-ca: &build-ca
+  secrets:
+    - build_ca
+
+services:
+  transcriber:
+    build:
+      context: ./servers
+      dockerfile: transcriber/Dockerfile
+      <<: *build-ca
+
+  google-workspace:
+    build:
+      context: ./servers/google-workspace
+      <<: *build-ca
+
+  web:
+    build:
+      context: ./servers
+      dockerfile: web/Dockerfile
+      secrets:
+        - build_ca
+    environment:
+      # DEV ONLY: allow exactly the fixture's address through the SSRF guard.
+      SSRF_ALLOW_CIDRS: 172.30.55.200/32
+      WEB_RATE_PER_MIN: "1000"   # dev: the e2e suite makes many calls
+
+  github:
+    environment:
+      GITHUB_READ_ONLY: "0"          # dev: exercise scope-based read/write end to end
+  hub-auth:
+    environment:
+      GITHUB_READ_ONLY: "0"
+      OAUTH_RATE_LIMIT_SCALE: "50"   # dev: the e2e suites register many clients from one IP
+    build:
+      context: ./servers
+      dockerfile: hub-auth/Dockerfile
+      secrets:
+        - build_ca
+
+  latex:
+    environment:
+      LATEX_MAX_PROJECTS: "500"   # dev: the e2e suites create many projects
+    build:
+      context: ./servers
+      dockerfile: latex/api/Dockerfile
+      secrets:
+        - build_ca
+
+  latex-worker:
+    build:
+      context: ./servers
+      dockerfile: latex/worker/Dockerfile
+      args:
+        TEXLIVE_SCHEME: ${TEXLIVE_SCHEME:-medium}
+      secrets:
+        - build_ca
+
+  web-fixture:
+    build: ./tests/web-fixture
+    networks:
+      fetchnet:
+        ipv4_address: 172.30.55.200
+
+  gateway:
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      GITHUB_PERSONAL_ACCESS_TOKEN: ghp_fakefakefakefakefakefakefakefake1234   # dev: fake PAT, never leaves the sandbox
+
+  dokploy:
+    build:
+      context: ./servers/dokploy
+      <<: *build-ca
+    environment:
+      DOKPLOY_URL: http://dokploy-stub:3000
+      DOKPLOY_API_KEY: stub-dokploy-api-key-for-local-tests
+    depends_on:
+      - dokploy-stub
+
+  dokploy-stub:
+    build: ./tests/dokploy-stub
+    networks:
+      - hub
+
+networks:
+  fetchnet:
+    ipam:
+      config:
+        - subnet: 172.30.55.0/24
+  dokploy-network:
+    external: false
+    name: mcp-hub-dev-edge
+
+# Optional CA bundle for building behind a TLS-intercepting proxy.
+# Defaults to an empty file, which the Dockerfiles ignore.
+secrets:
+  build_ca:
+    file: ${BUILD_CA_FILE:-/dev/null}

@@ -1,296 +1,62 @@
-# MCP Hub — Google Workspace, Transcriber, Dokploy
+# MCP Hub
 
-A unified, self-hosted **Model Context Protocol (MCP) hub** combining three powerful MCP servers, deployed on **Dokploy** with Docker. Enables Claude Code, Claude Desktop, and other MCP clients to seamlessly:
+One self-hosted entry point for several MCP servers, built to run as a single **Dokploy Compose** app.
+Access is controlled by **OAuth 2.1** (owner password + TOTP, scopes per MCP, short-lived rotating tokens);
+each MCP runs in its own hardened container.
 
-- **Manage Google Workspace** — Create, read, edit files in Google Drive, Docs, Sheets, Slides; send/manage emails; schedule calendar events
-- **Transcribe multilingual audio/video** — Convert MP3, WAV, MP4, MOV to text via Google Cloud Speech-to-Text
-- **Control Dokploy deployments** — Manage applications, databases, domains, backups from an MCP interface
+| Route | Server | Scopes | Needs |
+|---|---|---|---|
+| `/web/mcp` | in-repo: SearXNG search + readable fetch (ChatGPT-compatible `search`/`fetch`) | `web:read` | nothing (self-hosted SearXNG) |
+| `/latex/mcp` | in-repo: 30 tools, projects/edit/compile in an isolated sandbox | `latex:use` | nothing |
+| `/github/mcp` | official [`github-mcp-server`](https://github.com/github/github-mcp-server) 1.14.0 | `github:read` (+`github:write`) | `GITHUB_PERSONAL_ACCESS_TOKEN` |
+| `/dokploy/mcp` | official [`@dokploy/mcp`](https://github.com/Dokploy/mcp) 0.30.7 | `dokploy:use` | `DOKPLOY_URL`, `DOKPLOY_API_KEY` |
+| `/google-workspace/mcp` | [`workspace-mcp`](https://github.com/taylorwilsdon/google_workspace_mcp) 2.0.0 | `workspace:use` | Google OAuth client, `USER_GOOGLE_EMAIL` |
+| `/transcriber/mcp` | in-repo, Google Cloud Speech-to-Text | `transcriber:use` | `GOOGLE_CREDENTIALS_JSON` |
 
-## Quick Start
+An MCP whose credentials are missing still starts; calling it returns an error (GitHub: HTTP 503 from the gateway).
 
-### Prerequisites
+```
+client ─HTTPS─> Dokploy Traefik ─> gateway (Caddy) ──forward_auth──> hub-auth (OAuth server + token check)
+                                      └─> one container per MCP        (authnet, internal)
+networks: hub (trusted MCPs) · fetchnet (web, transcriber, searxng) · latexnet (latex + sandbox, NO internet) · authnet
+```
 
-- Docker & Docker Compose (v20.10+)
-- Dokploy instance running (self-hosted or cloud)
-- Google Cloud account with OAuth 2.0 credentials (for Workspace MCP only)
-- Dokploy API key (for Dokploy MCP)
-
-### Local Development
+## Run locally
 
 ```bash
-# Clone this repository
-git clone <repo-url> mcp-hub
-cd mcp-hub
-
-# Copy environment templates (transcriber has no secrets, just copy it)
-cp servers/google-workspace/.env.example servers/google-workspace/.env
-cp servers/transcriber/.env.example servers/transcriber/.env
-cp servers/dokploy/.env.example servers/dokploy/.env
-
-# Edit only the services that need credentials
-nano servers/google-workspace/.env  # Set GOOGLE_OAUTH_CLIENT_ID + SECRET
-nano servers/dokploy/.env           # Set DOKPLOY_URL + API_KEY
-# Transcriber needs no edits — it just works!
-
-# Build and start all MCP servers
-docker compose up --build
-
-# In another terminal, test the health endpoints
-curl http://localhost:8001/health   # Google Workspace
-curl http://localhost:8002/health   # Transcriber (no auth needed)
-curl http://localhost:8003/health   # Dokploy
+cp .env.example .env
+./scripts/gen-owner.sh                         # prints HUB_OWNER_PASSWORD_HASH + HUB_OWNER_TOTP_SECRET -> put both in .env
+# set PUBLIC_BASE_URL=http://127.0.0.1:8080 in .env
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# tests (need pip install mcp==2.3.0 httpx pyotp pytest; .env also needs HUBTEST_PASSWORD for the helper):
+set -a; . ./.env; set +a
+pytest tests/test_ssrf.py tests/test_latex_api.py tests/test_hubauth.py
+python tests/smoke.py && python tests/web_e2e.py && python tests/latex_e2e.py && python tests/oauth_e2e.py
+./tests/security.sh && python tests/gateway_failclosed.py
 ```
-
-Each server exposes an HTTP endpoint:
-- **Google Workspace MCP**: `http://localhost:8001` (port 8001) — requires OAuth setup
-- **Transcriber MCP**: `http://localhost:8002` (port 8002) — **ready to use immediately**
-- **Dokploy MCP**: `http://localhost:8003` (port 8003) — requires Dokploy credentials
-
-### Connecting to Claude Code
-
-Once services are running locally:
-
-```bash
-# Add Google Workspace MCP
-claude mcp add --transport http google-workspace http://localhost:8001
-
-# Add Transcriber MCP
-claude mcp add --transport http transcriber http://localhost:8002
-
-# Add Dokploy MCP
-claude mcp add --transport http dokploy http://localhost:8003
-
-# Verify tools are available
-claude mcp list-tools
-```
-
-See [docs/clients.md](docs/clients.md) for detailed Claude Code & Claude Desktop setup.
-
-## Architecture
-
-```
-mcp-hub/
-├── docker-compose.yml           # Three-service compose project
-├── servers/
-│   ├── google-workspace/        # Google Workspace MCP (120+ tools)
-│   │   ├── Dockerfile
-│   │   ├── docker-entrypoint.sh
-│   │   └── .env.example
-│   ├── transcriber/             # Google Speech-to-Text MCP (3 tools)
-│   │   ├── Dockerfile
-│   │   ├── server.py            # FastMCP implementation
-│   │   ├── requirements.txt
-│   │   └── .env.example
-│   └── dokploy/                 # Dokploy control MCP (53 tools)
-│       ├── Dockerfile
-│       ├── docker-entrypoint.sh
-│       └── .env.example
-└── docs/
-    ├── clients.md               # Claude Code / Desktop setup
-    ├── oauth-setup.md           # Google OAuth configuration
-    ├── gcp-setup.md             # Google Cloud project setup
-    └── deployment.md            # Dokploy deployment guide
-```
-
-## MCP Servers
-
-### 1. Google Workspace MCP
-**Tools**: 120+ across 12 Google services (Drive, Docs, Sheets, Slides, Gmail, Calendar, Tasks, Meet, Contacts, Admin)
-
-**Base**: [taylorwilsdon/workspace-mcp](https://github.com/taylorwilsdon/google_workspace_mcp)
-
-**Setup**:
-1. Create OAuth 2.0 credentials in Google Cloud Console
-2. Set `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in `.env`
-3. On first use, authenticate via OAuth browser flow
-4. Tokens persist in Docker volume for subsequent runs
-
-**Key features**:
-- Multi-tier tool exposure (limit context bloat by enabling only needed services)
-- OAuth 2.1 with automatic token refresh
-- Supports all standard Workspace operations
-
-See [docs/oauth-setup.md](docs/oauth-setup.md) for full OAuth guide.
-
-### 2. Transcriber MCP
-**Tools**: 3 (transcribe_audio, transcribe_video, list_supported_languages)
-
-**Base**: FastMCP wrapper around OpenAI Whisper (local speech recognition)
-
-**Supported formats**:
-- Audio: MP3, WAV, FLAC, OGG, M4A, and all FFmpeg-supported formats
-- Video: MP4, MOV, AVI, MKV, WebM (audio extracted automatically via FFmpeg)
-
-**Supported languages**: 99+ (en, es, fr, de, it, pt, pt-BR, ru, ja, ko, zh, zh-CN, zh-TW, ar, hi, and more)
-
-**Setup**: ✅ **Zero setup required!**
-- No credentials needed
-- No external API calls
-- Model auto-downloads and caches on first use (~140MB for base model)
-- Just works out of the box
-
-See [docs/gcp-setup.md](docs/gcp-setup.md) for model options and GPU setup.
-
-### 3. Dokploy MCP
-**Tools**: 53 across deployments, containers, databases, domains, backups, monitoring
-
-**Base**: [gaqno/dokploy-mcp](https://github.com/gaqno/dokploy-mcp)
-
-**Capabilities**:
-- Deploy/redeploy applications
-- Manage Docker containers, networks, volumes
-- Configure and backup databases (MySQL, PostgreSQL, MongoDB, Redis, MariaDB)
-- Manage domains and SSL certificates
-- Monitor resource usage and logs
-- Trigger backup/restore operations
-
-**Setup**:
-1. Get Dokploy API key from dashboard
-2. Set `DOKPLOY_URL` and `DOKPLOY_API_KEY` in `.env`
-3. Optionally set `MCP_BEARER_TOKEN` for additional security
-
-See [docs/deployment.md](docs/deployment.md) for Dokploy-specific deployment guide.
-
-## Deploying on Dokploy
-
-### 1. Push to Git Repository
-
-Dokploy pulls from a Git remote. Push this repository:
-
-```bash
-git add .
-git commit -m "Initial MCP hub commit"
-git push origin main
-```
-
-### 2. Create Dokploy Compose Project
-
-1. Log into Dokploy dashboard
-2. **Projects** → **New Project** → **Compose** (or select existing project)
-3. **Configure Git**:
-   - Repository URL: your fork's HTTPS URL
-   - Branch: `main`
-   - Dockerfile Path: Leave empty (uses docker-compose.yml)
-4. **Save**
-
-### 3. Set Environment Variables
-
-In Dokploy dashboard, configure per-service environment variables:
-
-**For google-workspace service**:
-- `GOOGLE_OAUTH_CLIENT_ID`: Your OAuth client ID
-- `GOOGLE_OAUTH_CLIENT_SECRET`: Your OAuth client secret
-- `GOOGLE_OAUTH_REDIRECT_URI`: `https://mcp.yourdomain.com/google-workspace/oauth/callback`
-
-**For transcriber service**:
-- ✅ **No setup needed** — Whisper model auto-caches on first run
-- Optional: Set `WHISPER_MODEL=base` (or tiny/small/medium/large)
-
-**For dokploy service**:
-- `DOKPLOY_URL`: Internal URL to Dokploy API (e.g., `http://dokploy:3000`)
-- `DOKPLOY_API_KEY`: API key from Dokploy settings
-
-### 4. Configure TLS & Domains
-
-Dokploy auto-configures Traefik routing:
-- **Google Workspace**: `https://mcp.yourdomain.com/google-workspace`
-- **Transcriber**: `https://mcp.yourdomain.com/transcriber`
-- **Dokploy**: `https://mcp.yourdomain.com/dokploy`
-
-Enable TLS in Dokploy dashboard (automatic via Let's Encrypt).
-
-### 5. Deploy
-
-Click **Deploy** in Dokploy. Monitor logs for errors.
-
-## Adding a New MCP Server
-
-To add a new MCP to the hub:
-
-1. **Create directory**: `servers/new-mcp-name/`
-2. **Add Dockerfile**: Wrap the existing MCP server or write minimal HTTP transport wrapper
-3. **Add `.env.example`**: Document required credentials
-4. **Update `docker-compose.yml`**: Add service block with health check and Traefik labels
-5. **Update this README**: Document the new MCP's tools and setup
-
-Example service in `docker-compose.yml`:
-
-```yaml
-new-mcp:
-  build:
-    context: ./servers/new-mcp-name
-    dockerfile: Dockerfile
-  container_name: mcp-new-mcp
-  env_file:
-    - ./servers/new-mcp-name/.env
-  ports:
-    - "8004:8000"
-  environment:
-    - MCP_HTTP_PORT=8000
-    - MCP_HOST=0.0.0.0
-  healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-    interval: 30s
-    timeout: 10s
-    retries: 3
-    start_period: 40s
-  restart: unless-stopped
-  labels:
-    - "traefik.enable=true"
-    - "traefik.http.routers.new-mcp.rule=PathPrefix(`/new-mcp`)"
-    - "traefik.http.services.new-mcp.loadbalancer.server.port=8000"
-```
-
-## Troubleshooting
-
-### Containers fail to start
-
-Check logs:
-```bash
-docker compose logs google-workspace
-docker compose logs transcriber
-docker compose logs dokploy
-```
-
-Common issues:
-- Missing `.env` files (copy from `.env.example`)
-- Invalid credentials (check Google OAuth / GCP / Dokploy settings)
-- Port conflicts (change `ports` in `docker-compose.yml` if needed)
-
-### OAuth flow hangs
-
-Ensure `GOOGLE_OAUTH_REDIRECT_URI` matches your actual deployment domain exactly.
-
-### Transcriber timeouts on large files
-
-Google Cloud Speech-to-Text has file size and duration limits. See [GCP docs](https://cloud.google.com/speech-to-text/quotas) for details.
-
-### Dokploy MCP cannot reach Dokploy API
-
-Verify `DOKPLOY_URL` is reachable from the container (use internal URL if both run in Docker).
-
-## Security Considerations
-
-- **Credentials**: Never commit `.env` files; use Dokploy's secrets management
-- **OAuth tokens**: Stored in Docker volumes; rotate credentials periodically
-- **MCP bearer tokens**: Set `MCP_BEARER_TOKEN` in Dokploy MCP for authenticated access
-- **Network**: Use HTTPS/TLS in production; behind firewall or VPN if possible
-- **Scopes**: Google Workspace MCP starts with docs/sheets/slides/drive/gmail/calendar; add others only as needed
-
-## License
-
-This hub integrates open-source MCP servers licensed under their respective terms:
-- `taylorwilsdon/workspace-mcp`: [License](https://github.com/taylorwilsdon/google_workspace_mcp/blob/main/LICENSE)
-- `gaqno/dokploy-mcp`: [License](https://github.com/gaqno/dokploy-mcp/blob/main/LICENSE)
-
-Transcriber MCP wrapper: MIT License
-
-## Contributing
-
-Improvements welcome! File issues or PRs to suggest new MCPs, fix bugs, or improve documentation.
-
-## Support
-
-- **MCP Spec**: [modelcontextprotocol.io](https://modelcontextprotocol.io)
-- **Anthropic Docs**: [claude.ai/docs](https://claude.ai/docs)
-- **Dokploy Docs**: [dokploy.com](https://dokploy.com)
+Behind a TLS-intercepting proxy add `-f docker-compose.proxy-ca.yml` with `BUILD_CA_FILE=/path/ca.crt`.
+
+## Connect a client
+
+See [docs/oauth.md](docs/oauth.md). In short: `claude mcp add --transport http web https://mcp.example.com/web/mcp`
+then authenticate in the browser; or add the URL as a custom connector in claude.ai / ChatGPT. One connector per MCP.
+
+## Docs
+
+[docs/dokploy.md](docs/dokploy.md) deploy · [docs/oauth.md](docs/oauth.md) how access works, operating, limits ·
+[docs/scopes.md](docs/scopes.md) · [docs/adding-an-mcp.md](docs/adding-an-mcp.md)
+
+## Security model and limits (summary)
+
+- Passing the owner login (password + a fresh TOTP code) is the root of trust: it can authorize clients for Dokploy,
+  GitHub and Google. Use a long unique password. Open Dynamic Client Registration is required by claude.ai/ChatGPT and
+  is mitigated, not eliminated (see docs/oauth.md).
+- Authorization is **per MCP, not per tool**. Dokploy and Workspace are all-or-nothing.
+- **LaTeX is code execution.** The sandbox has no network, no secrets, one job at a time, rlimits, a read-only root and
+  hardened TeX settings (shell-escape off, paranoid file access, `-norc`, a biber path guard). **LuaLaTeX is the exception**:
+  it cannot run under TeX's file restrictions, so its Lua can read any file inside the sandbox (which holds nothing
+  sensitive). Disable it with `LATEX_ENABLE_LUALATEX=false`. Not a multi-tenant sandbox.
+- Web fetch blocks private/internal addresses (resolve once, connect to the pinned IP, re-check every redirect) and runs
+  on a network that cannot reach the other MCPs. SearXNG result quality depends on upstream engines tolerating your IP.
+- No JavaScript rendering; transcriber limited to ~5 minutes per call.
+- Not verified in the build environment: real claude.ai/ChatGPT connectors, real GitHub/Google/Dokploy calls, Traefik/TLS.

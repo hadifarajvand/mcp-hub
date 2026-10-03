@@ -1,30 +1,21 @@
 FROM node:22-slim
 
-WORKDIR /app
+# Official Dokploy MCP server (https://github.com/Dokploy/mcp), pinned.
+# build_ca: optional CA for builds behind a TLS-intercepting proxy (see docker-compose.dev.yml)
+RUN --mount=type=secret,id=build_ca,required=false \
+    if [ -s /run/secrets/build_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/build_ca; fi; \
+    npm install -g --omit=dev @dokploy/mcp@0.30.7 && npm cache clean --force
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    curl \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# HTTP mode listens on :3000 and serves /mcp (streamable HTTP) and /health.
+# Secrets in API responses (env, passwords, tokens) are redacted by default.
+ENV NODE_ENV=production \
+    MCP_TRANSPORT=http \
+    DOKPLOY_REDACT_ENV=true
 
-# Clone dokploy-mcp repo (using --depth 1 for faster clone)
-RUN git clone --depth 1 https://github.com/gaqno/dokploy-mcp.git /app/dokploy_mcp_src
+USER node
+EXPOSE 3000
 
-# Install dependencies and build
-WORKDIR /app/dokploy_mcp_src
-RUN npm install --legacy-peer-deps --no-optional && npm run build && npm prune --production
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-# Copy entrypoint script
-COPY docker-entrypoint.sh /app/docker-entrypoint.sh
-RUN chmod +x /app/docker-entrypoint.sh
-
-EXPOSE 8000
-
-# Health check for API connectivity
-HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
-CMD []
+CMD ["dokploy-mcp"]

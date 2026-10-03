@@ -1,0 +1,21 @@
+# Optional overlay for hosts behind a TLS-intercepting HTTPS proxy: makes the
+# fetching containers trust your proxy's CA (verification stays enabled).
+#   BUILD_CA_FILE=/path/to/ca.crt docker compose -f docker-compose.yml \
+#     -f docker-compose.dev.yml -f docker-compose.proxy-ca.yml up -d --build
+services:
+  searxng:
+    volumes:
+      - ${BUILD_CA_FILE:?set BUILD_CA_FILE}:/extra-ca.crt:ro
+    environment:
+      SSL_CERT_FILE: /extra-ca.crt
+      REQUESTS_CA_BUNDLE: /extra-ca.crt
+  web:
+    volumes:
+      - ${BUILD_CA_FILE:?set BUILD_CA_FILE}:/extra-ca.crt:ro
+    environment:
+      SSRF_CA_BUNDLE: /extra-ca.crt
+  transcriber:
+    volumes:
+      - ${BUILD_CA_FILE:?set BUILD_CA_FILE}:/extra-ca.crt:ro
+    environment:
+      SSRF_CA_BUNDLE: /extra-ca.crt
