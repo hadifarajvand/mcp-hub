@@ -67,6 +67,14 @@ def test_connects_to_pinned_ip_keeps_host_and_sni_resolves_once():
     assert req.extensions["sni_hostname"] == "example.test"
 
 
+def test_final_url_exposed_after_redirect():
+    def handler(r):
+        return httpx.Response(302, headers={"location": "/final?x=1"}) if r.url.path == "/start" else httpx.Response(200, text="ok")
+    rec = Recorder(handler)
+    resp, _ = run(ssrf.safe_get("https://example.test/start", resolver=lambda h, p: [PUBLIC], transport=rec.transport))
+    assert resp.extensions["final_url"] == "https://example.test/final?x=1"
+
+
 def test_dns_rebinding_second_answer_is_never_used():
     answers = iter([[PUBLIC], ["127.0.0.1"], ["127.0.0.1"]])
     rec = Recorder(lambda r: httpx.Response(200, text="ok"))

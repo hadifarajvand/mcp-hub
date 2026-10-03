@@ -32,12 +32,14 @@ services:
       XDG_CONFIG_HOME: /tmp
     networks:
       - hub
+      - fetchnet
       - dokploy-network
     depends_on:
       - dokploy
       - github
       - transcriber
       - google-workspace
+      - web
     deploy:
       resources:
         limits: { cpus: "0.5", memory: 128M }
@@ -79,12 +81,55 @@ services:
     read_only: true
     tmpfs:
       - /tmp:size=512m
+    networks: [fetchnet]
     environment:
       GOOGLE_CREDENTIALS_JSON: ${GOOGLE_CREDENTIALS_JSON:-}
       TRANSCRIBER_MAX_INPUT_MB: ${TRANSCRIBER_MAX_INPUT_MB:-20}
     deploy:
       resources:
         limits: { cpus: "1.0", memory: 768M }
+
+  # Web search + fetch. Lives on `fetchnet`, which cannot reach dokploy/github/workspace.
+  web:
+    <<: *hardening
+    build:
+      context: ./servers
+      dockerfile: web/Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks: [fetchnet]
+    environment:
+      SEARXNG_URL: http://searxng:8080
+      WEB_RESPECT_ROBOTS: ${WEB_RESPECT_ROBOTS:-true}
+      WEB_RATE_PER_MIN: ${WEB_RATE_PER_MIN:-60}
+    depends_on:
+      - searxng
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
+  searxng:
+    <<: *hardening
+    image: searxng/searxng:2026.10.2-19ffbcd30
+    user: "977:977"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/searxng:uid=977,gid=977
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    networks: [fetchnet]
+    environment:
+      GRANIAN_HOST: 0.0.0.0   # image default is :: (IPv6), which Docker bridge networks may lack
+    # Random per-start secret (only signs ephemeral state); then the image's own entrypoint.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - export SEARXNG_SECRET="$$(head -c 32 /dev/urandom | base64 | tr -dc A-Za-z0-9)"; exec /usr/local/searxng/entrypoint.sh
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
 
   google-workspace:
     <<: *hardening
@@ -111,5 +156,6 @@ volumes:
 
 networks:
   hub:
+  fetchnet:        # services that fetch arbitrary internet URLs; isolated from trusted MCPs
   dokploy-network:
     external: true

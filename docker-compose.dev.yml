@@ -19,6 +19,23 @@ services:
       context: ./servers/google-workspace
       <<: *build-ca
 
+  web:
+    build:
+      context: ./servers
+      dockerfile: web/Dockerfile
+      secrets:
+        - build_ca
+    environment:
+      # DEV ONLY: allow exactly the fixture's address through the SSRF guard.
+      SSRF_ALLOW_CIDRS: 172.30.55.200/32
+      WEB_RATE_PER_MIN: "1000"   # dev: the e2e suite makes many calls
+
+  web-fixture:
+    build: ./tests/web-fixture
+    networks:
+      fetchnet:
+        ipv4_address: 172.30.55.200
+
   gateway:
     ports:
       - "127.0.0.1:8080:8080"
@@ -39,6 +56,10 @@ services:
       - hub
 
 networks:
+  fetchnet:
+    ipam:
+      config:
+        - subnet: 172.30.55.0/24
   dokploy-network:
     external: false
     name: mcp-hub-dev-edge

@@ -112,7 +112,10 @@ async def safe_stream(
     hdrs = {"User-Agent": "mcp-hub/1.0 (+fetch)", "Accept-Encoding": "gzip, deflate"}
     hdrs.update(headers or {})
     # trust_env=False: never inherit proxy/cert/netrc settings from the environment.
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False, transport=transport) as client:
+    # SSRF_CA_BUNDLE: extra trust store for TLS-intercepting corporate proxies (verification stays ON).
+    verify: str | bool = os.getenv("SSRF_CA_BUNDLE") or True
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False, verify=verify,
+                                 transport=transport) as client:
         current = url
         for _ in range(max_redirects + 1):
             target, port = _check_url(current, allowed_ports)
@@ -131,6 +134,7 @@ async def safe_stream(
                     raise SSRFError("Redirect without Location")
                 current = urljoin(current, location)
                 continue
+            resp.extensions["final_url"] = current  # resp.url is the pinned IP; expose the real URL
             try:
                 yield resp
             finally:
